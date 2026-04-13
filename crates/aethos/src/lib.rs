@@ -5,7 +5,7 @@ pub use aethos_core::{
     Conn, Plug, Next, BoxPlug, Params, FlashMap, ResponseBody, AethosError, TypeMap,
     async_trait, axum, bytes, http, serde, serde_json, tower, tracing,
     Telemetry,
-    Supervisor, ChildSpec, RestartConfig, RestartPolicy,
+    Supervisor, SupervisorStrategy, SupervisorHandle, ChildSpec, RestartConfig, RestartPolicy, DynamicSupervisor,
 };
 
 pub use aethos_router::{Pipeline, Endpoint};

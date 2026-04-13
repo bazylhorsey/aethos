@@ -20,7 +20,7 @@ pub use error::AethosError;
 pub use type_map::TypeMap;
 pub use session::{Session, set_session_secret};
 pub use telemetry::Telemetry;
-pub use supervisor::{Supervisor, ChildSpec, RestartConfig, RestartPolicy};
+pub use supervisor::{Supervisor, SupervisorStrategy, SupervisorHandle, ChildSpec, RestartConfig, RestartPolicy, DynamicSupervisor};
 
 pub use async_trait::async_trait;
 pub use axum;
