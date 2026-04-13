@@ -1,9 +1,8 @@
 use crate::{Conn, Next, Plug};
 use http::HeaderValue;
 
-/// Sets recommended security headers on every response:
-/// X-Frame-Options, X-Content-Type-Options, X-XSS-Protection,
-/// Referrer-Policy, and a basic Content-Security-Policy.
+/// Sets recommended security headers on every response.
+#[derive(Default)]
 pub struct SecureHeaders;
 
 #[async_trait::async_trait]

@@ -46,25 +46,29 @@ pub trait LiveView: Send + Sync + 'static {
     }
 
     /// Called by the router to handle an incoming HTTP request.
-    /// Performs the initial static render, then upgrades to WS if possible.
+    /// Performs the initial static render wrapped in the LiveView container.
     async fn handle_request(&self, conn: Conn) -> Response
     where
-        Self: Sized + 'static,
+        Self: Sized + Default + 'static,
     {
-        // Extract path params
         let params = extract_params(&conn);
-
-        // Initial static render (connected: false)
         let socket = LiveSocket::new(false);
-        let socket = Self::mount(params.clone(), socket).await;
-        let html = Self::render(&socket);
+        let socket = Self::mount(params, socket).await;
+        let html   = Self::render(&socket);
 
-        // Wrap in a minimal HTML shell
         let page = format!(
             r#"<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><script type="module" src="/_aethos/aethos.js"></script></head>
-<body data-phx-root id="phx-root">{}</body>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script type="module" src="/_aethos/aethos.js"></script>
+</head>
+<body>
+  <div id="phx-root" data-phx-live>
+    {}
+  </div>
+</body>
 </html>"#,
             html.as_str()
         );

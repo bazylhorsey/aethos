@@ -34,7 +34,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream> {
         {
             let mut __html = ::std::string::String::new();
             #stmts
-            ::aethos_html::Html(__html)
+            ::aethos::Html(__html)
         }
     })
 }
@@ -275,9 +275,22 @@ fn parse_attrs_full(
             }
             continue;
         }
-        // Regular attribute name
+        // Regular attribute name (may be hyphenated: phx-click, data-value, etc.)
         let name = match cursor.next_tok() {
-            Some(TokenTree::Ident(i)) => i.to_string(),
+            Some(TokenTree::Ident(i)) => {
+                let mut s = i.to_string();
+                // Collect trailing `-ident` segments for hyphenated names
+                while cursor.is_punct('-') {
+                    if let Some(TokenTree::Ident(_)) = cursor.peek2() {
+                        cursor.next_tok(); // consume `-`
+                        s.push('-');
+                        s.push_str(&cursor.expect_ident().unwrap_or_default());
+                    } else {
+                        break;
+                    }
+                }
+                s
+            }
             Some(TokenTree::Literal(l)) => l.to_string().trim_matches('"').to_owned(),
             other => return Err(syn::Error::new(tt_span_opt(&other), "expected attribute name")),
         };
@@ -379,7 +392,7 @@ fn gen_node(node: &Node) -> TokenStream {
             quote! { __html.push_str(#e); }
         }
         Node::Expr(ts) => quote! {
-            __html.push_str(&::aethos_html::html_escape(&format!("{}", #ts)));
+            __html.push_str(&::aethos::html_escape(&format!("{}", #ts)));
         },
         Node::RawExpr(ts) => quote! {
             __html.push_str(&format!("{}", #ts));
@@ -436,7 +449,7 @@ fn gen_attr(a: &Attr) -> TokenStream {
             __html.push_str(&format!(
                 " {}=\"{}\"",
                 #name,
-                ::aethos_html::html_escape(&format!("{}", #ts))
+                ::aethos::html_escape(&format!("{}", #ts))
             ));
         },
     }
@@ -457,7 +470,7 @@ fn gen_component(c: &Component) -> TokenStream {
     };
     quote! {
         {
-            let __ca = ::aethos_html::Assigns::new()#(#attr_calls)*;
+            let __ca = ::aethos::Assigns::new()#(#attr_calls)*;
             __html.push_str(&#call(__ca).0);
         }
     }

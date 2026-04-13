@@ -10,6 +10,7 @@ members = [
     "crates/aethos_live",
     "crates/aethos_macros",
     "crates/aethos_cli",
+    "crates/aethos_example",
 ]
 resolver = "2"
 
@@ -57,3 +58,4 @@ aethos_channels = { path = "crates/aethos_channels" }
 aethos_presence = { path = "crates/aethos_presence" }
 aethos_live     = { path = "crates/aethos_live" }
 aethos_macros   = { path = "crates/aethos_macros" }
+aethos          = { path = "crates/aethos" }

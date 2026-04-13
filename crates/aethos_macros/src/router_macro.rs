@@ -274,7 +274,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream> {
         {
             #(#pipeline_fns)*
 
-            let mut __router = ::axum::Router::new();
+            let mut __router = ::aethos::axum::Router::new();
             #(#route_blocks)*
             __router
         }
@@ -290,14 +290,14 @@ fn gen_pipeline_fn(p: &PipelineDef) -> TokenStream {
             let ty = &plug.plug_type;
             if let Some(args) = &plug.args {
                 quote! {
-                    conn = ::aethos_core::Plug::call(&#ty::init((#args,)), conn,
-                        ::aethos_core::Next::terminal()).await;
+                    conn = ::aethos::Plug::call(&#ty::init((#args,)), conn,
+                        ::aethos::Next::terminal()).await;
                     if conn.halted { return conn; }
                 }
             } else {
                 quote! {
-                    conn = ::aethos_core::Plug::call(&#ty::default(), conn,
-                        ::aethos_core::Next::terminal()).await;
+                    conn = ::aethos::Plug::call(&#ty::default(), conn,
+                        ::aethos::Next::terminal()).await;
                     if conn.halted { return conn; }
                 }
             }
@@ -305,7 +305,7 @@ fn gen_pipeline_fn(p: &PipelineDef) -> TokenStream {
         .collect();
 
     quote! {
-        async fn #fn_name(mut conn: ::aethos_core::Conn) -> ::aethos_core::Conn {
+        async fn #fn_name(mut conn: ::aethos::Conn) -> ::aethos::Conn {
             #(#plug_applications)*
             conn
         }
@@ -367,19 +367,19 @@ fn gen_route(r: &RouteDef, prefix: &LitStr, pipe_names: &[Ident]) -> TokenStream
     let pipeline_calls = pipeline_runner_calls(pipe_names);
 
     let axum_method = match method.to_string().to_lowercase().as_str() {
-        "get" => quote! { ::axum::routing::get },
-        "post" => quote! { ::axum::routing::post },
-        "put" => quote! { ::axum::routing::put },
-        "patch" => quote! { ::axum::routing::patch },
-        "delete" => quote! { ::axum::routing::delete },
-        "head" => quote! { ::axum::routing::head },
-        "options" => quote! { ::axum::routing::options },
-        _ => quote! { ::axum::routing::any },
+        "get" => quote! { ::aethos::axum::routing::get },
+        "post" => quote! { ::aethos::axum::routing::post },
+        "put" => quote! { ::aethos::axum::routing::put },
+        "patch" => quote! { ::aethos::axum::routing::patch },
+        "delete" => quote! { ::aethos::axum::routing::delete },
+        "head" => quote! { ::aethos::axum::routing::head },
+        "options" => quote! { ::aethos::axum::routing::options },
+        _ => quote! { ::aethos::axum::routing::any },
     };
 
     quote! {
-        __router = __router.route(#path, #axum_method(|req: ::axum::extract::Request| async move {
-            let conn = ::aethos_core::Conn::new(req);
+        __router = __router.route(#path, #axum_method(|req: ::aethos::axum::extract::Request| async move {
+            let conn = ::aethos::Conn::new(req);
             #pipeline_calls
             let conn = #controller::#action(conn).await;
             conn.into_response()
@@ -393,30 +393,30 @@ fn gen_live_route(r: &LiveRouteDef, prefix: &LitStr, pipe_names: &[Ident]) -> To
     let pipeline_calls = pipeline_runner_calls(pipe_names);
 
     quote! {
-        __router = __router.route(#path, ::axum::routing::get(|req: ::axum::extract::Request| async move {
-            use ::axum::extract::FromRequest;
+        __router = __router.route(#path, ::aethos::axum::routing::get(|req: ::aethos::axum::extract::Request| async move {
+            use ::aethos::axum::extract::FromRequest;
 
             // Check Upgrade header — WebSocket requests have `Upgrade: websocket`
             let is_ws = req.headers()
-                .get(::axum::http::header::UPGRADE)
+                .get(::aethos::http::header::UPGRADE)
                 .and_then(|v| v.to_str().ok())
                 .map(|v| v.eq_ignore_ascii_case("websocket"))
                 .unwrap_or(false);
 
             if is_ws {
-                match ::axum::extract::WebSocketUpgrade::from_request(req, &()).await {
+                match ::aethos::axum::extract::WebSocketUpgrade::from_request(req, &()).await {
                     Ok(ws) => ws.on_upgrade(|socket| {
-                        ::aethos_live::handle_live_socket::<#live_view>(
+                        ::aethos::handle_live_socket::<#live_view>(
                             socket,
                             ::std::collections::HashMap::new(),
                         )
                     }),
-                    Err(e) => ::axum::response::IntoResponse::into_response(e),
+                    Err(e) => ::aethos::axum::response::IntoResponse::into_response(e),
                 }
             } else {
-                let conn = ::aethos_core::Conn::new(req);
+                let conn = ::aethos::Conn::new(req);
                 #pipeline_calls
-                ::aethos_live::LiveView::handle_request(
+                ::aethos::LiveView::handle_request(
                     &<#live_view as ::std::default::Default>::default(),
                     conn,
                 ).await
@@ -430,11 +430,11 @@ fn gen_websocket_route(r: &WebSocketRouteDef, prefix: &LitStr, _pipe_names: &[Id
     let socket = &r.socket;
 
     quote! {
-        __router = __router.route(#path, ::axum::routing::get(|
-            ws: ::axum::extract::WebSocketUpgrade,
-            req: ::axum::extract::Request,
+        __router = __router.route(#path, ::aethos::axum::routing::get(|
+            ws: ::aethos::axum::extract::WebSocketUpgrade,
+            req: ::aethos::axum::extract::Request,
         | async move {
-            ws.on_upgrade(|socket| ::aethos_channels::handle_socket(#socket::new(), socket))
+            ws.on_upgrade(|socket| ::aethos::handle_socket(<#socket as ::std::default::Default>::default(), socket))
         }));
     }
 }
@@ -462,44 +462,44 @@ fn gen_resources(r: &ResourcesDef, prefix: &LitStr, pipe_names: &[Ident]) -> Tok
 
     quote! {
         __router = __router
-            .route(#index_path, ::axum::routing::get(|req: ::axum::extract::Request| async move {
-                let conn = ::aethos_core::Conn::new(req);
+            .route(#index_path, ::aethos::axum::routing::get(|req: ::aethos::axum::extract::Request| async move {
+                let conn = ::aethos::Conn::new(req);
                 #pipeline_calls
                 let conn = #controller::index(conn).await;
                 conn.into_response()
             }))
-            .route(#new_path, ::axum::routing::get(|req: ::axum::extract::Request| async move {
-                let conn = ::aethos_core::Conn::new(req);
+            .route(#new_path, ::aethos::axum::routing::get(|req: ::aethos::axum::extract::Request| async move {
+                let conn = ::aethos::Conn::new(req);
                 #pc2
                 let conn = #controller::new(conn).await;
                 conn.into_response()
             }))
-            .route(#create_path, ::axum::routing::post(|req: ::axum::extract::Request| async move {
-                let conn = ::aethos_core::Conn::new(req);
+            .route(#create_path, ::aethos::axum::routing::post(|req: ::aethos::axum::extract::Request| async move {
+                let conn = ::aethos::Conn::new(req);
                 #pc3
                 let conn = #controller::create(conn).await;
                 conn.into_response()
             }))
-            .route(#show_path, ::axum::routing::get(|req: ::axum::extract::Request| async move {
-                let conn = ::aethos_core::Conn::new(req);
+            .route(#show_path, ::aethos::axum::routing::get(|req: ::aethos::axum::extract::Request| async move {
+                let conn = ::aethos::Conn::new(req);
                 #pc4
                 let conn = #controller::show(conn).await;
                 conn.into_response()
             }))
-            .route(#edit_path, ::axum::routing::get(|req: ::axum::extract::Request| async move {
-                let conn = ::aethos_core::Conn::new(req);
+            .route(#edit_path, ::aethos::axum::routing::get(|req: ::aethos::axum::extract::Request| async move {
+                let conn = ::aethos::Conn::new(req);
                 #pc5
                 let conn = #controller::edit(conn).await;
                 conn.into_response()
             }))
-            .route(#update_path, ::axum::routing::put(|req: ::axum::extract::Request| async move {
-                let conn = ::aethos_core::Conn::new(req);
+            .route(#update_path, ::aethos::axum::routing::put(|req: ::aethos::axum::extract::Request| async move {
+                let conn = ::aethos::Conn::new(req);
                 #pc6
                 let conn = #controller::update(conn).await;
                 conn.into_response()
             }))
-            .route(#delete_path, ::axum::routing::delete(|req: ::axum::extract::Request| async move {
-                let conn = ::aethos_core::Conn::new(req);
+            .route(#delete_path, ::aethos::axum::routing::delete(|req: ::aethos::axum::extract::Request| async move {
+                let conn = ::aethos::Conn::new(req);
                 #pc7
                 let conn = #controller::delete(conn).await;
                 conn.into_response()

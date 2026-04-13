@@ -12,14 +12,18 @@ pub use aethos_html::{Html, Assigns, html_escape, Safe, default_root_layout, Inn
 
 pub use aethos_pubsub::{PubSub, Message};
 
-pub use aethos_channels::{Socket, Channel};
+pub use aethos_channels::{Socket, Channel, handle_socket};
+/// Re-export channel sub-types
+pub mod channel {
+    pub use aethos_channels::channel::{JoinResult, JoinError};
+}
 
 pub use aethos_presence::Presence;
 
 pub use aethos_live::{LiveView, LiveSocket, handle_live_socket};
 
 // Built-in plugs
-pub use aethos_core::plugs::{Logger, RequestId, SecureHeaders};
+pub use aethos_core::plugs::{Logger, RequestId, SecureHeaders, BodyParser};
 
 // Proc macros
 pub use aethos_macros::{router, h, controller};

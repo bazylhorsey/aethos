@@ -1,6 +1,7 @@
 use crate::{Conn, Next, Plug};
 
 /// Logs each request: method, path, status, and elapsed time.
+#[derive(Default)]
 pub struct Logger;
 
 #[async_trait::async_trait]

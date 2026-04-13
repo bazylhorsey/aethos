@@ -3,6 +3,7 @@ use http::HeaderValue;
 use uuid::Uuid;
 
 /// Attaches a unique `X-Request-Id` header to each request and response.
+#[derive(Default)]
 pub struct RequestId;
 
 #[async_trait::async_trait]
