@@ -26,6 +26,7 @@ uuid        = { workspace = true }
 chrono      = { version = "0.4", features = ["serde"] }
 regex       = "1"
 itoa        = "1"
+aethos_orm_macros = { path = "../aethos_orm_macros" }
 
 [dev-dependencies]
 tokio       = { workspace = true, features = ["full"] }

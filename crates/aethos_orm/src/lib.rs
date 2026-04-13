@@ -16,6 +16,7 @@ pub mod changeset;
 pub mod query;
 pub mod migration;
 pub mod error;
+pub mod value;
 
 pub use repo::{Repo, AnyPool, PoolConfig};
 pub use schema::Schema;
@@ -23,6 +24,10 @@ pub use changeset::{Changeset, ChangesetError};
 pub use query::Query;
 pub use migration::MigrationRunner;
 pub use error::OrmError;
+pub use value::SqlValue;
+
+/// Re-export the `#[derive(Schema)]` macro.
+pub use aethos_orm_macros::Schema;
 
 pub use sqlx;
 pub use chrono;

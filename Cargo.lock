@@ -137,6 +137,7 @@ dependencies = [
 name = "aethos_orm"
 version = "0.1.0"
 dependencies = [
+ "aethos_orm_macros",
  "chrono",
  "futures",
  "itoa",
@@ -149,6 +150,15 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "aethos_orm_macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

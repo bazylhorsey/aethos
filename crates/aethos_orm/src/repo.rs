@@ -29,11 +29,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde::{de::DeserializeOwned, Serialize};
+use serde::Serialize;
 use sqlx::{Database, Pool};
 
 use crate::error::OrmError;
 use crate::schema::Schema;
+use crate::value::SqlValue;
 
 /// Type alias for a pool that erases the concrete DB type.
 pub type AnyPool = sqlx::AnyPool;
@@ -127,26 +128,20 @@ impl Repo<sqlx::Sqlite> {
         Ok(r.rows_affected())
     }
 
-    /// Typed insert using the [`Schema`] trait.
+    /// Typed insert using the [`Schema`] trait — **zero JSON intermediate**.
     ///
-    /// Builds the SQL from compile-time column metadata — no JSON key inspection,
-    /// no intermediate allocations for column names, deterministic column ordering.
-    /// Returns the auto-generated integer id.
+    /// Columns come from `T::columns()` (compile-time constant), values come
+    /// from `T::to_row_values()` which calls `From` on each field directly.
+    /// No `serde_json::to_value`, no HashMap key inspection.
     pub async fn insert<T>(&self, record: &T) -> Result<i64, OrmError>
     where
-        T: Schema + Serialize,
+        T: Schema,
     {
         let cols = T::columns();
-        let table = T::table_name();
-        let sql = build_insert_sql(table, cols, "?");
-        let json = serde_json::to_value(record)
-            .map_err(|e| OrmError::Validation(e.to_string()))?;
-        let obj = json.as_object()
-            .ok_or_else(|| OrmError::Validation("record must be a JSON object".into()))?;
+        let sql  = build_insert_sql(T::table_name(), cols, "?");
         let mut q = sqlx::query(&sql);
-        for col in cols {
-            let val = obj.get(*col).unwrap_or(&serde_json::Value::Null);
-            q = bind_json_value(q, val);
+        for val in record.to_row_values() {
+            q = val.bind_sqlite(q);
         }
         Ok(q.execute(self.pool()).await?.last_insert_rowid())
     }
@@ -176,7 +171,7 @@ impl Repo<sqlx::Sqlite> {
 
     pub async fn all<T>(&self, table: &str) -> Result<Vec<T>, OrmError>
     where
-        T: DeserializeOwned + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Send + Unpin,
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Send + Unpin,
     {
         Ok(sqlx::query_as::<_, T>(&format!("SELECT * FROM {table}"))
             .fetch_all(self.pool()).await?)
@@ -184,7 +179,7 @@ impl Repo<sqlx::Sqlite> {
 
     pub async fn get<T>(&self, table: &str, id: i64) -> Result<T, OrmError>
     where
-        T: DeserializeOwned + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Send + Unpin,
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Send + Unpin,
     {
         sqlx::query_as::<_, T>(&format!("SELECT * FROM {table} WHERE id = ?1 LIMIT 1"))
             .bind(id).fetch_optional(self.pool()).await?
@@ -220,31 +215,24 @@ impl Repo<sqlx::Postgres> {
         Ok(sqlx::query(sql).execute(self.pool()).await?.rows_affected())
     }
 
-    /// Typed insert for Postgres (uses `$1, $2, …` placeholders).
-    pub async fn insert<T>(&self, record: &T) -> Result<i64, OrmError>
+    /// Typed insert for Postgres — zero JSON, uses `$1, $2, …` placeholders.
+    pub async fn insert<T>(&self, record: &T) -> Result<(), OrmError>
     where
-        T: Schema + Serialize,
+        T: Schema,
     {
         let cols = T::columns();
-        let table = T::table_name();
-        let sql = build_insert_sql(table, cols, "$");
-        let json = serde_json::to_value(record)
-            .map_err(|e| OrmError::Validation(e.to_string()))?;
-        let obj = json.as_object()
-            .ok_or_else(|| OrmError::Validation("record must be a JSON object".into()))?;
+        let sql  = build_insert_sql(T::table_name(), cols, "$");
         let mut q = sqlx::query(&sql);
-        for col in cols {
-            let val = obj.get(*col).unwrap_or(&serde_json::Value::Null);
-            q = bind_json_value(q, val);
+        for val in record.to_row_values() {
+            q = val.bind_postgres(q);
         }
-        let row: (i64,) = q.fetch_one(self.pool()).await
-            .map(|_| (0i64,))?; // Postgres: use RETURNING id for real id
-        Ok(row.0)
+        q.execute(self.pool()).await?;
+        Ok(())
     }
 
     pub async fn all<T>(&self, table: &str) -> Result<Vec<T>, OrmError>
     where
-        T: DeserializeOwned + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> + Send + Unpin,
+        T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> + Send + Unpin,
     {
         Ok(sqlx::query_as::<_, T>(&format!("SELECT * FROM {table}"))
             .fetch_all(self.pool()).await?)
@@ -252,7 +240,7 @@ impl Repo<sqlx::Postgres> {
 
     pub async fn get<T>(&self, table: &str, id: i64) -> Result<T, OrmError>
     where
-        T: DeserializeOwned + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> + Send + Unpin,
+        T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> + Send + Unpin,
     {
         sqlx::query_as::<_, T>(&format!("SELECT * FROM {table} WHERE id = $1 LIMIT 1"))
             .bind(id).fetch_optional(self.pool()).await?
