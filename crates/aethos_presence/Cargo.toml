@@ -1,0 +1,15 @@
+[package]
+name        = "aethos_presence"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aethos_core.workspace    = true
+aethos_pubsub.workspace  = true
+aethos_channels.workspace = true
+tokio.workspace          = true
+serde.workspace          = true
+serde_json.workspace     = true
+async-trait.workspace    = true
+tracing.workspace        = true
+thiserror.workspace      = true

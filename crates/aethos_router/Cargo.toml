@@ -1,0 +1,13 @@
+[package]
+name        = "aethos_router"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aethos_core.workspace  = true
+axum.workspace         = true
+tower.workspace        = true
+async-trait.workspace  = true
+tracing.workspace      = true
+tracing-subscriber     = { workspace = true }
+tokio.workspace        = true

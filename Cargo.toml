@@ -1,0 +1,58 @@
+[workspace]
+members = [
+    "crates/aethos",
+    "crates/aethos_core",
+    "crates/aethos_router",
+    "crates/aethos_html",
+    "crates/aethos_pubsub",
+    "crates/aethos_channels",
+    "crates/aethos_presence",
+    "crates/aethos_live",
+    "crates/aethos_macros",
+    "crates/aethos_cli",
+]
+resolver = "2"
+
+[workspace.package]
+version      = "0.1.0"
+edition      = "2021"
+license      = "MIT"
+
+[workspace.dependencies]
+# async runtime
+tokio        = { version = "1", features = ["full"] }
+# HTTP
+axum         = { version = "0.8", features = ["ws", "macros"] }
+tower        = { version = "0.5", features = ["full"] }
+tower-http   = { version = "0.6", features = ["full"] }
+hyper        = { version = "1" }
+# serialization
+serde        = { version = "1", features = ["derive"] }
+serde_json   = "1"
+# session
+tower-sessions = { version = "0.14" }
+# proc-macro support
+proc-macro2  = "1"
+quote        = "1"
+syn          = { version = "2", features = ["full"] }
+# async trait
+async-trait  = "0.1"
+# misc
+uuid         = { version = "1", features = ["v4"] }
+bytes        = "1"
+http         = "1"
+http-body-util = "0.1"
+thiserror    = "2"
+tracing      = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand         = "0.9"
+futures      = "0.3"
+# internal crates
+aethos_core     = { path = "crates/aethos_core" }
+aethos_router   = { path = "crates/aethos_router" }
+aethos_html     = { path = "crates/aethos_html" }
+aethos_pubsub   = { path = "crates/aethos_pubsub" }
+aethos_channels = { path = "crates/aethos_channels" }
+aethos_presence = { path = "crates/aethos_presence" }
+aethos_live     = { path = "crates/aethos_live" }
+aethos_macros   = { path = "crates/aethos_macros" }

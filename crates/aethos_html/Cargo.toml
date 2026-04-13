@@ -1,0 +1,10 @@
+[package]
+name        = "aethos_html"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aethos_core.workspace  = true
+aethos_macros.workspace = true
+serde.workspace        = true
+serde_json.workspace   = true

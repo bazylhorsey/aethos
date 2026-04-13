@@ -1,0 +1,16 @@
+[package]
+name        = "aethos_channels"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aethos_core.workspace   = true
+aethos_pubsub.workspace = true
+axum.workspace          = true
+tokio.workspace         = true
+serde.workspace         = true
+serde_json.workspace    = true
+async-trait.workspace   = true
+tracing.workspace       = true
+thiserror.workspace     = true
+futures                 = { workspace = true }

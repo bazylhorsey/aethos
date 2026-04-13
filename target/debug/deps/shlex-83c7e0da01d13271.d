@@ -1,0 +1,8 @@
+/home/arvist/Projects/aethos/target/debug/deps/shlex-83c7e0da01d13271.d: /home/arvist/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shlex-1.3.0/src/lib.rs /home/arvist/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shlex-1.3.0/src/bytes.rs
+
+/home/arvist/Projects/aethos/target/debug/deps/libshlex-83c7e0da01d13271.rlib: /home/arvist/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shlex-1.3.0/src/lib.rs /home/arvist/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shlex-1.3.0/src/bytes.rs
+
+/home/arvist/Projects/aethos/target/debug/deps/libshlex-83c7e0da01d13271.rmeta: /home/arvist/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shlex-1.3.0/src/lib.rs /home/arvist/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shlex-1.3.0/src/bytes.rs
+
+/home/arvist/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shlex-1.3.0/src/lib.rs:
+/home/arvist/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/shlex-1.3.0/src/bytes.rs:

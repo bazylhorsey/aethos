@@ -1,0 +1,78 @@
+use async_trait::async_trait;
+use axum::response::Response;
+use serde_json::Value;
+
+use aethos_core::Conn;
+use aethos_html::Html;
+
+use crate::LiveSocket;
+
+/// Parameters map passed to `mount`.
+pub type Params = std::collections::HashMap<String, String>;
+
+/// The core LiveView trait. Implement this and register with `live!()` in the router.
+///
+/// Lifecycle:
+/// 1. `mount` — initial state setup (called twice: static render + WS connect)
+/// 2. `render` — returns an `Html` fragment from the current socket assigns
+/// 3. `handle_event` — reacts to browser events (`phx-click`, `phx-submit`, etc.)
+/// 4. `handle_info` — reacts to internal Tokio/PubSub messages
+#[async_trait]
+pub trait LiveView: Send + Sync + 'static {
+    /// Initialize the LiveView state.
+    async fn mount(params: Params, socket: LiveSocket) -> LiveSocket
+    where
+        Self: Sized;
+
+    /// Render the current state into HTML.
+    fn render(socket: &LiveSocket) -> Html
+    where
+        Self: Sized;
+
+    /// Handle a browser event.
+    async fn handle_event(_event: &str, _payload: Value, socket: LiveSocket) -> LiveSocket
+    where
+        Self: Sized,
+    {
+        socket
+    }
+
+    /// Handle an internal message (from PubSub, timers, etc.)
+    async fn handle_info(_msg: Value, socket: LiveSocket) -> LiveSocket
+    where
+        Self: Sized,
+    {
+        socket
+    }
+
+    /// Called by the router to handle an incoming HTTP request.
+    /// Performs the initial static render, then upgrades to WS if possible.
+    async fn handle_request(&self, conn: Conn) -> Response
+    where
+        Self: Sized + 'static,
+    {
+        // Extract path params
+        let params = extract_params(&conn);
+
+        // Initial static render (connected: false)
+        let socket = LiveSocket::new(false);
+        let socket = Self::mount(params.clone(), socket).await;
+        let html = Self::render(&socket);
+
+        // Wrap in a minimal HTML shell
+        let page = format!(
+            r#"<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><script type="module" src="/_aethos/aethos.js"></script></head>
+<body data-phx-root id="phx-root">{}</body>
+</html>"#,
+            html.as_str()
+        );
+
+        conn.html(page).into_response()
+    }
+}
+
+fn extract_params(conn: &Conn) -> Params {
+    conn.params.inner().clone()
+}

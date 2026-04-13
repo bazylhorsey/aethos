@@ -1,0 +1,23 @@
+[package]
+name        = "aethos"
+version.workspace = true
+edition.workspace = true
+description = "Phoenix-inspired web framework for Rust"
+
+[dependencies]
+aethos_core.workspace     = true
+aethos_router.workspace   = true
+aethos_html.workspace     = true
+aethos_pubsub.workspace   = true
+aethos_channels.workspace = true
+aethos_presence.workspace = true
+aethos_live.workspace     = true
+aethos_macros.workspace   = true
+tokio.workspace           = true
+axum.workspace            = true
+tower.workspace           = true
+tower-http.workspace      = true
+tracing.workspace         = true
+tracing-subscriber.workspace = true
+serde.workspace           = true
+serde_json.workspace      = true
