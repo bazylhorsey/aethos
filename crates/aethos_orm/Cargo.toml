@@ -24,6 +24,8 @@ sqlx        = { version = "0.8", features = [
 ] }
 uuid        = { workspace = true }
 chrono      = { version = "0.4", features = ["serde"] }
+regex       = "1"
+itoa        = "1"
 
 [dev-dependencies]
 tokio       = { workspace = true, features = ["full"] }

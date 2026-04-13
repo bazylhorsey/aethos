@@ -78,14 +78,33 @@ impl Changeset {
         self
     }
 
-    /// Field value must match `pattern`.
-    pub fn validate_format(mut self, field: &str, pattern: &str) -> Self {
+    /// Field value must match the compiled regex `re`.
+    ///
+    /// Callers should compile the pattern once (e.g. via `std::sync::LazyLock`)
+    /// and pass a reference here — regex compilation is expensive and should
+    /// never happen on the hot path.
+    ///
+    /// ```rust
+    /// use aethos_orm::Changeset;
+    /// use regex::Regex;
+    /// use std::sync::LazyLock;
+    ///
+    /// static EMAIL_RE: LazyLock<Regex> = LazyLock::new(|| {
+    ///     Regex::new(r"^[^@\s]+@[^@\s]+\.[^@\s]+$").unwrap()
+    /// });
+    ///
+    /// let cs = Changeset::new()
+    ///     .cast_str("email", Some("bad-email"))
+    ///     .validate_format("email", &EMAIL_RE);
+    ///
+    /// assert!(!cs.is_valid());
+    /// ```
+    pub fn validate_format(mut self, field: &str, re: &regex::Regex) -> Self {
         if let Some(v) = self.data.get(field) {
-            // Use a simple contains check; callers can provide full regex via validate_with
-            if !v.contains(pattern) {
+            if !re.is_match(v) {
                 self.errors.push(ChangesetError {
                     field: field.to_owned(),
-                    message: format!("has invalid format (expected to contain `{pattern}`)"),
+                    message: format!("has invalid format (must match {})", re.as_str()),
                 });
             }
         }
@@ -132,6 +151,12 @@ impl Changeset {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use regex::Regex;
+    use std::sync::LazyLock;
+
+    static EMAIL_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^[^@\s]+@[^@\s]+\.[^@\s]+$").unwrap()
+    });
 
     #[test]
     fn valid_changeset() {
@@ -159,6 +184,19 @@ mod tests {
             .cast_str("bio", Some("Hi"))
             .validate_length("bio", 10, 500);
         assert!(!cs.is_valid());
+    }
+
+    #[test]
+    fn format_validation_regex() {
+        let valid = Changeset::new()
+            .cast_str("email", Some("alice@example.com"))
+            .validate_format("email", &EMAIL_RE);
+        assert!(valid.is_valid());
+
+        let invalid = Changeset::new()
+            .cast_str("email", Some("not-an-email"))
+            .validate_format("email", &EMAIL_RE);
+        assert!(!invalid.is_valid());
     }
 
     #[test]

@@ -75,27 +75,23 @@ impl Repo<sqlx::Sqlite> {
         let obj = json.as_object()
             .ok_or_else(|| OrmError::Validation("record must be a JSON object".into()))?;
 
-        let cols: Vec<&str> = obj.keys().map(String::as_str).collect();
-        let placeholders: Vec<String> = (1..=cols.len()).map(|i| format!("?{i}")).collect();
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES ({})",
-            table,
-            cols.join(", "),
-            placeholders.join(", ")
-        );
+        // Single pass: build both column list and placeholder list simultaneously.
+        // Avoids two intermediate Vecs and a second iteration to bind values.
+        let mut cols = String::new();
+        let mut placeholders = String::new();
+        for (i, key) in obj.keys().enumerate() {
+            if i > 0 { cols.push_str(", "); placeholders.push_str(", "); }
+            cols.push_str(key);
+            // push_str + itoa-style avoids format! allocation per placeholder
+            placeholders.push('?');
+            let mut buf = itoa::Buffer::new();
+            placeholders.push_str(buf.format(i + 1));
+        }
+        let sql = format!("INSERT INTO {table} ({cols}) VALUES ({placeholders})");
 
         let mut q = sqlx::query(&sql);
-        for col in &cols {
-            match &obj[*col] {
-                serde_json::Value::Null         => q = q.bind(None::<String>),
-                serde_json::Value::Bool(b)      => q = q.bind(*b),
-                serde_json::Value::Number(n)    => {
-                    if let Some(i) = n.as_i64() { q = q.bind(i); }
-                    else { q = q.bind(n.as_f64().unwrap_or(0.0)); }
-                }
-                serde_json::Value::String(s)    => q = q.bind(s.clone()),
-                other                           => q = q.bind(other.to_string()),
-            }
+        for val in obj.values() {
+            q = bind_json_value(q, val);
         }
         let result = q.execute(self.pool()).await?;
         Ok(result.last_insert_rowid())
@@ -173,5 +169,34 @@ impl Repo<sqlx::Postgres> {
             .execute(self.pool())
             .await?;
         Ok(())
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Bind a single `serde_json::Value` onto a sqlx query without re-allocating
+/// the value — strings are cloned (unavoidable with sqlx's owned-bind API),
+/// but numbers and booleans are bound as their native types.
+fn bind_json_value<'q, DB>(
+    q: sqlx::query::Query<'q, DB, DB::Arguments<'q>>,
+    val: &serde_json::Value,
+) -> sqlx::query::Query<'q, DB, DB::Arguments<'q>>
+where
+    DB: sqlx::Database,
+    bool:         sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    i64:          sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    f64:          sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    String:       sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+{
+    match val {
+        serde_json::Value::Null         => q.bind(None::<String>),
+        serde_json::Value::Bool(b)      => q.bind(*b),
+        serde_json::Value::Number(n)    => {
+            if let Some(i) = n.as_i64() { q.bind(i) }
+            else { q.bind(n.as_f64().unwrap_or(0.0)) }
+        }
+        serde_json::Value::String(s)    => q.bind(s.clone()),
+        other                           => q.bind(other.to_string()),
     }
 }
