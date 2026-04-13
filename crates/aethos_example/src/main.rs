@@ -11,7 +11,6 @@ use aethos::{
     h,
     Conn,
     ConnHtmlExt,
-    Html,
     Template,
     Endpoint,
     Logger,

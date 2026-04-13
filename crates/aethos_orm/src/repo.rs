@@ -34,7 +34,6 @@ use sqlx::{Database, Pool};
 
 use crate::error::OrmError;
 use crate::schema::Schema;
-use crate::value::SqlValue;
 
 /// Type alias for a pool that erases the concrete DB type.
 pub type AnyPool = sqlx::AnyPool;

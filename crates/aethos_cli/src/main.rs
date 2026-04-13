@@ -382,7 +382,6 @@ fn cmd_gen_migration(name: &str) {
 }
 
 fn cmd_db_migrate(project_root: &str) {
-    use std::process::Command;
     // We spin up a small async runtime just for migration
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

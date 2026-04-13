@@ -13,6 +13,7 @@ members = [
     "crates/aethos_example",
     "crates/aethos_orm",
     "crates/aethos_orm_macros",
+    "crates/aethos_wiki",
 ]
 resolver = "2"
 
