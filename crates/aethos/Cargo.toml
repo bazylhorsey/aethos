@@ -13,6 +13,7 @@ aethos_channels.workspace = true
 aethos_presence.workspace = true
 aethos_live.workspace     = true
 aethos_macros.workspace   = true
+aethos_orm                = { path = "../aethos_orm" }
 tokio.workspace           = true
 axum.workspace            = true
 tower.workspace           = true

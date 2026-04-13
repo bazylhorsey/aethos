@@ -1,0 +1,30 @@
+[package]
+name    = "aethos_orm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Database access layer for Aethos — schema, repo, changeset, query DSL, migrations"
+
+[dependencies]
+tokio       = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+thiserror   = { workspace = true }
+tracing     = { workspace = true }
+futures     = { workspace = true }
+sqlx        = { version = "0.8", features = [
+    "runtime-tokio-native-tls",
+    "postgres",
+    "sqlite",
+    "macros",
+    "migrate",
+    "uuid",
+    "json",
+    "chrono",
+] }
+uuid        = { workspace = true }
+chrono      = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tokio       = { workspace = true, features = ["full"] }
+tempfile    = "3"

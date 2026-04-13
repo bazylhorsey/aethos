@@ -10,4 +10,7 @@ path = "src/main.rs"
 [dependencies]
 serde.workspace      = true
 serde_json.workspace = true
+tokio.workspace      = true
+aethos_orm           = { path = "../aethos_orm" }
 regex = "1"
+sqlx = { version = "0.8", features = ["runtime-tokio-native-tls", "sqlite"] }

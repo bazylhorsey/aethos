@@ -17,6 +17,11 @@ fn main() {
         ["gen", "controller", name] => cmd_gen_controller(name),
         ["gen", "live", name] => cmd_gen_live(name),
         ["gen", "channel", name] => cmd_gen_channel(name),
+        ["gen", "migration", name] => cmd_gen_migration(name),
+        ["db.migrate"] => cmd_db_migrate("."),
+        ["db.rollback"] => cmd_db_rollback("."),
+        ["db.reset"] => cmd_db_reset("."),
+        ["db.status"] => cmd_db_status("."),
         ["routes"] => cmd_routes("."),
         _ => {
             eprintln!("{}", HELP);
@@ -29,11 +34,18 @@ const HELP: &str = r#"
 cargo aethos — Aethos framework scaffold tool
 
 USAGE:
-    cargo aethos new <app_name>           Create a new Aethos application
-    cargo aethos gen controller <Name>    Generate a controller
-    cargo aethos gen live <Name>          Generate a LiveView
-    cargo aethos gen channel <Name>       Generate a Channel
-    cargo aethos routes                   Print all routes defined in src/
+    cargo aethos new <app_name>              Create a new Aethos application
+    cargo aethos gen controller <Name>       Generate a controller
+    cargo aethos gen live <Name>             Generate a LiveView
+    cargo aethos gen channel <Name>          Generate a Channel
+    cargo aethos gen migration <name>        Generate a timestamped migration file
+
+    cargo aethos db.migrate                  Run pending migrations
+    cargo aethos db.rollback                 Roll back the last migration
+    cargo aethos db.reset                    Drop and recreate the database
+    cargo aethos db.status                   Show applied migrations
+
+    cargo aethos routes                      Print all routes defined in src/
 "#;
 
 fn cmd_new(name: &str) {
@@ -336,6 +348,118 @@ impl Channel for {name}Channel {{
 }}
 "#
     )
+}
+
+// ── DB / Migration commands ───────────────────────────────────────────────────
+
+fn migration_dir(project_root: &str) -> std::path::PathBuf {
+    Path::new(project_root).join("priv").join("repo").join("migrations")
+}
+
+fn db_url(project_root: &str) -> String {
+    // Read DATABASE_URL from env or fall back to a SQLite dev db
+    std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+        let db = Path::new(project_root).join("priv").join("repo").join("dev.db");
+        format!("sqlite://{}", db.display())
+    })
+}
+
+fn cmd_gen_migration(name: &str) {
+    let ts = {
+        // Use a simple numeric timestamp from SystemTime
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        secs
+    };
+    let filename = format!("{ts}_{name}.sql");
+    let dir = migration_dir(".");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(&filename);
+    std::fs::write(&path, format!("-- Migration: {name}\n\n")).unwrap();
+    println!("Created migration: {}", path.display());
+}
+
+fn cmd_db_migrate(project_root: &str) {
+    use std::process::Command;
+    // We spin up a small async runtime just for migration
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let url = db_url(project_root);
+        let pool = match sqlx::SqlitePool::connect(&url).await {
+            Ok(p) => p,
+            Err(e) => { eprintln!("db.migrate: cannot connect: {e}"); process::exit(1); }
+        };
+        let runner = aethos_orm::MigrationRunner::new(migration_dir(project_root));
+        if let Err(e) = runner.run(&pool).await {
+            eprintln!("db.migrate failed: {e}");
+            process::exit(1);
+        }
+        println!("Migrations complete.");
+    });
+}
+
+fn cmd_db_rollback(project_root: &str) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let url = db_url(project_root);
+        let pool = match sqlx::SqlitePool::connect(&url).await {
+            Ok(p) => p,
+            Err(e) => { eprintln!("db.rollback: cannot connect: {e}"); process::exit(1); }
+        };
+        let runner = aethos_orm::MigrationRunner::new(migration_dir(project_root));
+        if let Err(e) = runner.rollback(&pool).await {
+            eprintln!("db.rollback failed: {e}");
+            process::exit(1);
+        }
+        println!("Rollback complete.");
+    });
+}
+
+fn cmd_db_reset(project_root: &str) {
+    let url = db_url(project_root);
+    // For SQLite, just remove the file and re-migrate
+    if url.starts_with("sqlite://") {
+        let file = url.trim_start_matches("sqlite://");
+        if Path::new(file).exists() {
+            std::fs::remove_file(file).unwrap();
+            println!("Dropped: {file}");
+        }
+    } else {
+        eprintln!("db.reset only supports SQLite automatically. For Postgres, drop/create the DB manually.");
+    }
+    cmd_db_migrate(project_root);
+}
+
+fn cmd_db_status(project_root: &str) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let url = db_url(project_root);
+        let pool = match sqlx::SqlitePool::connect(&url).await {
+            Ok(p) => p,
+            Err(e) => { eprintln!("db.status: cannot connect: {e}"); process::exit(1); }
+        };
+        let runner = aethos_orm::MigrationRunner::new(migration_dir(project_root));
+        match runner.status(&pool).await {
+            Ok(rows) if rows.is_empty() => println!("No migrations applied."),
+            Ok(rows) => {
+                println!("{:<50} {}", "Migration", "Applied at");
+                println!("{}", "-".repeat(70));
+                for (name, ts) in rows { println!("{:<50} {}", name, ts); }
+            }
+            Err(e) => { eprintln!("db.status failed: {e}"); process::exit(1); }
+        }
+    });
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

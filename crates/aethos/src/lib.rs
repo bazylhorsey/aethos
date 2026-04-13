@@ -39,6 +39,11 @@ pub use aethos_macros::{router, h, controller, path};
 // Re-export assigns! and h! convenience macros
 pub use aethos_html::assigns;
 
+/// Database access — schema, repo, changeset, query DSL, migrations.
+pub mod orm {
+    pub use aethos_orm::{Repo, Schema, Changeset, ChangesetError, Query, MigrationRunner, OrmError, sqlx, chrono, uuid};
+}
+
 /// Telemetry event types and helpers.
 pub mod telemetry {
     pub use aethos_core::telemetry::{Event, Telemetry, elapsed_ms, system_time_ms};
