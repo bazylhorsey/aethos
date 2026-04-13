@@ -394,9 +394,33 @@ fn gen_live_route(r: &LiveRouteDef, prefix: &LitStr, pipe_names: &[Ident]) -> To
 
     quote! {
         __router = __router.route(#path, ::axum::routing::get(|req: ::axum::extract::Request| async move {
-            let conn = ::aethos_core::Conn::new(req);
-            #pipeline_calls
-            ::aethos_live::LiveView::handle_request(&#live_view, conn).await
+            use ::axum::extract::FromRequest;
+
+            // Check Upgrade header — WebSocket requests have `Upgrade: websocket`
+            let is_ws = req.headers()
+                .get(::axum::http::header::UPGRADE)
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.eq_ignore_ascii_case("websocket"))
+                .unwrap_or(false);
+
+            if is_ws {
+                match ::axum::extract::WebSocketUpgrade::from_request(req, &()).await {
+                    Ok(ws) => ws.on_upgrade(|socket| {
+                        ::aethos_live::handle_live_socket::<#live_view>(
+                            socket,
+                            ::std::collections::HashMap::new(),
+                        )
+                    }),
+                    Err(e) => ::axum::response::IntoResponse::into_response(e),
+                }
+            } else {
+                let conn = ::aethos_core::Conn::new(req);
+                #pipeline_calls
+                ::aethos_live::LiveView::handle_request(
+                    &<#live_view as ::std::default::Default>::default(),
+                    conn,
+                ).await
+            }
         }));
     }
 }

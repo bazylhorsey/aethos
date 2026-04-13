@@ -8,7 +8,7 @@ pub use aethos_core::{
 
 pub use aethos_router::{Pipeline, Endpoint};
 
-pub use aethos_html::{Html, Assigns, html_escape};
+pub use aethos_html::{Html, Assigns, html_escape, Safe, default_root_layout, InnerContent, ConnHtmlExt};
 
 pub use aethos_pubsub::{PubSub, Message};
 
@@ -16,7 +16,7 @@ pub use aethos_channels::{Socket, Channel};
 
 pub use aethos_presence::Presence;
 
-pub use aethos_live::{LiveView, LiveSocket};
+pub use aethos_live::{LiveView, LiveSocket, handle_live_socket};
 
 // Built-in plugs
 pub use aethos_core::plugs::{Logger, RequestId, SecureHeaders};

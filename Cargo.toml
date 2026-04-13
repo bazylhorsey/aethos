@@ -47,6 +47,7 @@ tracing      = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rand         = "0.9"
 futures      = "0.3"
+anyhow       = "1"
 # internal crates
 aethos_core     = { path = "crates/aethos_core" }
 aethos_router   = { path = "crates/aethos_router" }
