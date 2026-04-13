@@ -1,12 +1,15 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 
+use crate::Html;
+
 /// Typed assigns passed into function components — analogous to Phoenix's `assigns` map.
 /// Values are accessed in `h!` templates via `@name`.
 #[derive(Default)]
 pub struct Assigns {
     typed: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     named: HashMap<String, Box<dyn Any + Send + Sync>>,
+    slots: HashMap<String, Html>,
 }
 
 impl Assigns {
@@ -14,6 +17,7 @@ impl Assigns {
         Self {
             typed: HashMap::new(),
             named: HashMap::new(),
+            slots: HashMap::new(),
         }
     }
 
@@ -27,6 +31,25 @@ impl Assigns {
     pub fn set(mut self, key: impl Into<String>, val: impl Any + Send + Sync) -> Self {
         self.named.insert(key.into(), Box::new(val));
         self
+    }
+
+    /// Insert a named slot (used by `h!` for `<:slot_name>content</:slot_name>`).
+    ///
+    /// Inside components, render slots with `assigns.slot("header")` or
+    /// `{raw(assigns.slot("inner_block"))}` in `h!`.
+    pub fn put_slot(mut self, name: impl Into<String>, html: Html) -> Self {
+        self.slots.insert(name.into(), html);
+        self
+    }
+
+    /// Retrieve a named slot's rendered HTML (empty if not provided).
+    pub fn slot(&self, name: &str) -> Html {
+        self.slots.get(name).cloned().unwrap_or(Html(String::new()))
+    }
+
+    /// Returns `true` if the named slot was provided by the caller.
+    pub fn has_slot(&self, name: &str) -> bool {
+        self.slots.contains_key(name)
     }
 
     /// Retrieve a value by type.

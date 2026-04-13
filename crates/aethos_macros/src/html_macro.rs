@@ -68,6 +68,10 @@ struct Component {
     module: Option<String>,
     name: String,
     attrs: Vec<Attr>,
+    /// Children passed as `inner_block` slot (non-slot content between open/close tags).
+    inner_block: Vec<Node>,
+    /// Named slots: `<:header>...</:header>` → `("header", [nodes])`.
+    named_slots: Vec<(String, Vec<Node>)>,
 }
 
 struct Attr {
@@ -210,8 +214,18 @@ fn parse_element_or_component(cursor: &mut Cursor) -> Result<Node> {
     if cursor.is_punct('.') {
         cursor.next_tok();
         let name = cursor.expect_ident()?;
-        let attrs = parse_attrs(cursor)?;
-        return Ok(Node::Component(Component { module: None, name, attrs }));
+        let (attrs, self_closing, _, _) = parse_attrs_full(cursor)?;
+        if self_closing {
+            return Ok(Node::Component(Component {
+                module: None, name, attrs,
+                inner_block: vec![], named_slots: vec![],
+            }));
+        }
+        let (inner_block, named_slots) = parse_component_body(cursor)?;
+        consume_component_close_tag(cursor, None, &name)?;
+        return Ok(Node::Component(Component {
+            module: None, name, attrs, inner_block, named_slots,
+        }));
     }
 
     if let Some(TokenTree::Ident(_)) = cursor.peek() {
@@ -220,13 +234,113 @@ fn parse_element_or_component(cursor: &mut Cursor) -> Result<Node> {
         if cursor.is_punct('.') {
             cursor.next_tok();
             let name = cursor.expect_ident()?;
-            let attrs = parse_attrs(cursor)?;
-            return Ok(Node::Component(Component { module: Some(first), name, attrs }));
+            let (attrs, self_closing, _, _) = parse_attrs_full(cursor)?;
+            if self_closing {
+                return Ok(Node::Component(Component {
+                    module: Some(first), name, attrs,
+                    inner_block: vec![], named_slots: vec![],
+                }));
+            }
+            let (inner_block, named_slots) = parse_component_body(cursor)?;
+            consume_component_close_tag(cursor, Some(&first), &name)?;
+            return Ok(Node::Component(Component {
+                module: Some(first), name, attrs, inner_block, named_slots,
+            }));
         }
         return parse_html_element(cursor, first);
     }
 
     Err(syn::Error::new(Span::call_site(), "expected tag name after `<`"))
+}
+
+/// Parse the body of a component tag: extracts `<:slot>...</:slot>` named slots
+/// and any other content goes into `inner_block`. Stops at `</`.
+fn parse_component_body(
+    cursor: &mut Cursor,
+) -> Result<(Vec<Node>, Vec<(String, Vec<Node>)>)> {
+    let mut inner_block: Vec<Node> = Vec::new();
+    let mut named_slots: Vec<(String, Vec<Node>)> = Vec::new();
+
+    loop {
+        if cursor.is_empty() { break; }
+        // Stop at any close tag `</` (either slot close or component close)
+        if is_close_tag(cursor) { break; }
+
+        // Detect named slot open tag: `<:slot_name>`
+        if cursor.is_punct('<') {
+            if matches!(cursor.peek2(), Some(TokenTree::Punct(p)) if p.as_char() == ':') {
+                cursor.next_tok(); // consume `<`
+                cursor.next_tok(); // consume `:`
+                let slot_name = cursor.expect_ident()?;
+                cursor.expect_punct('>')?;
+                // Parse slot content until `</:slot_name>`
+                let slot_children = parse_nodes(cursor, None)?;
+                // Consume `</:slot_name>`
+                cursor.expect_punct('<')?;
+                cursor.expect_punct('/')?;
+                cursor.expect_punct(':')?;
+                let close = cursor.expect_ident()?;
+                if close != slot_name {
+                    return Err(syn::Error::new(
+                        Span::call_site(),
+                        format!("mismatched slot close: expected `</:{}>`", slot_name),
+                    ));
+                }
+                cursor.expect_punct('>')?;
+                named_slots.push((slot_name, slot_children));
+                continue;
+            }
+            // Regular HTML element or component
+            inner_block.push(parse_element_or_component(cursor)?);
+            continue;
+        }
+
+        if let Some(TokenTree::Group(g)) = cursor.peek() {
+            if g.delimiter() == Delimiter::Brace {
+                let g = match cursor.next_tok() {
+                    Some(TokenTree::Group(g)) => g,
+                    _ => unreachable!(),
+                };
+                inner_block.push(parse_brace_expr(g.stream()));
+                continue;
+            }
+        }
+
+        let text = collect_text(cursor);
+        if !text.is_empty() { inner_block.push(Node::Text(text)); }
+    }
+
+    Ok((inner_block, named_slots))
+}
+
+/// Consume a component close tag: `</.name>` or `</Mod.name>`.
+fn consume_component_close_tag(
+    cursor: &mut Cursor,
+    module: Option<&str>,
+    name: &str,
+) -> Result<()> {
+    cursor.expect_punct('<')?;
+    cursor.expect_punct('/')?;
+    if let Some(m) = module {
+        let got_mod = cursor.expect_ident()?;
+        if got_mod != m {
+            return Err(syn::Error::new(
+                Span::call_site(),
+                format!("expected `</{m}.{name}>`"),
+            ));
+        }
+        cursor.expect_punct('.')?;
+    } else {
+        cursor.expect_punct('.')?;
+    }
+    let got_name = cursor.expect_ident()?;
+    if got_name != name {
+        return Err(syn::Error::new(
+            Span::call_site(),
+            format!("expected closing tag for component `{name}`"),
+        ));
+    }
+    cursor.expect_punct('>')
 }
 
 fn parse_html_element(cursor: &mut Cursor, tag: String) -> Result<Node> {
@@ -462,6 +576,33 @@ fn gen_component(c: &Component) -> TokenStream {
         AttrValue::Static(s)   => quote! { .put(#s.to_string()) },
         AttrValue::Bool        => quote! {},
     }).collect();
+
+    // Named slots: <:header>...</:header>
+    let slot_calls: Vec<TokenStream> = c.named_slots.iter().map(|(name, children)| {
+        let body = gen_nodes(children);
+        quote! {
+            .put_slot(#name, {
+                let mut __html = ::std::string::String::new();
+                #body
+                ::aethos::Html(__html)
+            })
+        }
+    }).collect();
+
+    // inner_block: non-slot children between open/close tags
+    let inner_block_call = if !c.inner_block.is_empty() {
+        let body = gen_nodes(&c.inner_block);
+        quote! {
+            .put_slot("inner_block", {
+                let mut __html = ::std::string::String::new();
+                #body
+                ::aethos::Html(__html)
+            })
+        }
+    } else {
+        quote! {}
+    };
+
     let call = if let Some(m) = &c.module {
         let m = proc_macro2::Ident::new(m, Span::call_site());
         quote! { #m::#n }
@@ -470,8 +611,8 @@ fn gen_component(c: &Component) -> TokenStream {
     };
     quote! {
         {
-            let __ca = ::aethos::Assigns::new()#(#attr_calls)*;
-            __html.push_str(&#call(__ca).0);
+            let __ca = ::aethos::Assigns::new()#(#attr_calls)*#(#slot_calls)*#inner_block_call;
+            __html.push_str(&#call(&__ca).0);
         }
     }
 }

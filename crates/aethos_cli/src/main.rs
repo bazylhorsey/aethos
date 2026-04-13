@@ -17,6 +17,7 @@ fn main() {
         ["gen", "controller", name] => cmd_gen_controller(name),
         ["gen", "live", name] => cmd_gen_live(name),
         ["gen", "channel", name] => cmd_gen_channel(name),
+        ["routes"] => cmd_routes("."),
         _ => {
             eprintln!("{}", HELP);
             process::exit(1);
@@ -32,6 +33,7 @@ USAGE:
     cargo aethos gen controller <Name>    Generate a controller
     cargo aethos gen live <Name>          Generate a LiveView
     cargo aethos gen channel <Name>       Generate a Channel
+    cargo aethos routes                   Print all routes defined in src/
 "#;
 
 fn cmd_new(name: &str) {
@@ -89,6 +91,103 @@ fn cmd_gen_channel(name: &str) {
     let path = format!("src/channels/{snake}_channel.rs");
     write_file(Path::new(&path), &scaffold_channel(name));
     println!("✓ Generated Channel: {path}");
+}
+
+/// Scan source files for `router!` macro bodies and extract route definitions.
+///
+/// Recognises: `get!(`, `post!(`, `put!(`, `patch!(`, `delete!(`,
+///             `resources!(`, `live!(`, `websocket!(`.
+fn cmd_routes(root: &str) {
+    use std::fs;
+
+    #[derive(Debug)]
+    struct Route { method: String, path: String, handler: String }
+
+    let mut routes: Vec<Route> = Vec::new();
+
+    // Walk every *.rs file under root/src
+    let src = std::path::Path::new(root).join("src");
+    let rs_files = find_rs_files(&src);
+
+    let route_re = build_route_regex();
+
+    for file in &rs_files {
+        let Ok(content) = fs::read_to_string(file) else { continue };
+        for cap in route_re.captures_iter(&content) {
+            let method  = cap[1].to_uppercase();
+            let path    = cap[2].trim().to_owned();
+            let handler = cap.get(3).map_or("", |m| m.as_str()).trim().to_owned();
+            let (display_method, display_path, display_handler) = match method.as_str() {
+                "RESOURCES" => ("*", path.as_str(), handler.as_str()),
+                "LIVE"      => ("WS/GET", path.as_str(), handler.as_str()),
+                "WEBSOCKET" => ("WS", path.as_str(), handler.as_str()),
+                _           => (method.as_str(), path.as_str(), handler.as_str()),
+            };
+            routes.push(Route {
+                method:  display_method.to_owned(),
+                path:    display_path.to_owned(),
+                handler: display_handler.to_owned(),
+            });
+        }
+    }
+
+    if routes.is_empty() {
+        println!("No routes found. Make sure src/ contains router! macro invocations.");
+        return;
+    }
+
+    // Pretty-print table
+    let col_method  = routes.iter().map(|r| r.method.len()).max().unwrap_or(6).max(6);
+    let col_path    = routes.iter().map(|r| r.path.len()).max().unwrap_or(4).max(4);
+    let col_handler = routes.iter().map(|r| r.handler.len()).max().unwrap_or(7).max(7);
+
+    let sep = format!(
+        "+-{}-+-{}-+-{}-+",
+        "-".repeat(col_method),
+        "-".repeat(col_path),
+        "-".repeat(col_handler),
+    );
+    println!("{sep}");
+    println!(
+        "| {:<col_method$} | {:<col_path$} | {:<col_handler$} |",
+        "METHOD", "PATH", "HANDLER"
+    );
+    println!("{sep}");
+    for r in &routes {
+        println!(
+            "| {:<col_method$} | {:<col_path$} | {:<col_handler$} |",
+            r.method, r.path, r.handler
+        );
+    }
+    println!("{sep}");
+    println!("{} route(s) total.", routes.len());
+}
+
+fn find_rs_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else { return out };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            out.extend(find_rs_files(&path));
+        } else if path.extension().map_or(false, |e| e == "rs") {
+            out.push(path);
+        }
+    }
+    out
+}
+
+/// Returns a regex that matches route macro invocations:
+/// `get!("/path", Handler, action)` or `live!("/path", Live)`
+fn build_route_regex() -> regex::Regex {
+    regex::Regex::new(
+        r#"(?x)
+        (get|post|put|patch|delete|resources|live|websocket)   # method macro name
+        \s*!\s*\(                                                # !( opener
+        \s*"([^"]+)"                                             # quoted path
+        (?:\s*,\s*([^),]+))?                                     # optional handler
+        "#
+    ).expect("route regex is valid")
 }
 
 // ── Templates ─────────────────────────────────────────────────────────────────

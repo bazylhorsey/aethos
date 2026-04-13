@@ -2,6 +2,7 @@ use axum::{Router, response::{IntoResponse, Response}};
 use http::{header, StatusCode, HeaderValue};
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
+use tower_http::services::ServeDir;
 use tracing::info;
 
 /// The compiled aethos.js client bundle, embedded at build time.
@@ -19,6 +20,21 @@ impl Endpoint {
     pub fn new(router: Router) -> Self {
         let router = router.route("/_aethos/aethos.js", axum::routing::get(serve_aethos_js));
         Self { router }
+    }
+
+    /// Serve static files from `dir` at `url_prefix`.
+    ///
+    /// Equivalent to `Plug.Static` in Phoenix.
+    ///
+    /// ```rust,ignore
+    /// Endpoint::new(router)
+    ///     .serve_static("/assets", "priv/static/assets")
+    ///     .start(addr)
+    ///     .await?;
+    /// ```
+    pub fn serve_static(mut self, url_prefix: &str, dir: &str) -> Self {
+        self.router = self.router.nest_service(url_prefix, ServeDir::new(dir));
+        self
     }
 
     /// Start listening on `addr`. This is async and runs until the process exits.

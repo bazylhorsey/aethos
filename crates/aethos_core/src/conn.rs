@@ -4,7 +4,7 @@ use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
 use serde::Serialize;
 
-use crate::{FlashMap, Params, ResponseBody, TypeMap};
+use crate::{FlashMap, Params, ResponseBody, TypeMap, Session};
 
 /// The central connection struct passed through every plug, analogous to `Plug.Conn`.
 ///
@@ -21,6 +21,9 @@ pub struct Conn {
 
     /// Flash messages (survive one redirect via the session).
     pub flash: FlashMap,
+
+    /// Cookie-backed session data, available after the `FetchSession` plug runs.
+    pub session: Session,
 
     /// HTTP status code to send in the response.
     pub status: StatusCode,
@@ -41,11 +44,26 @@ pub struct Conn {
 impl Conn {
     /// Create a new `Conn` from an incoming Axum request.
     pub fn new(request: Request<Body>) -> Self {
+        let mut params = Params::new();
+
+        // Extract query string: ?foo=bar&baz=qux → params
+        if let Some(query) = request.uri().query() {
+            for pair in query.split('&') {
+                let mut parts = pair.splitn(2, '=');
+                let k = parts.next().unwrap_or("").trim();
+                let v = parts.next().unwrap_or("");
+                if !k.is_empty() {
+                    params.insert(url_decode(k), url_decode(v));
+                }
+            }
+        }
+
         Self {
             request,
             assigns: TypeMap::new(),
-            params: Params::new(),
+            params,
             flash: FlashMap::new(),
+            session: Session::new(),
             status: StatusCode::OK,
             resp_headers: HeaderMap::new(),
             body: ResponseBody::Empty,
@@ -183,18 +201,120 @@ impl Conn {
         self
     }
 
+    // ── Status shortcuts ──────────────────────────────────────────────────────
+
+    /// 200 OK with no body. Useful as a default before setting a body.
+    pub fn ok(self) -> Self { self.put_status(StatusCode::OK) }
+
+    /// 201 Created — body should describe the created resource.
+    pub fn created(mut self, body: impl Into<String>) -> Self {
+        self.status = StatusCode::CREATED;
+        self.resp_headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        self.body = ResponseBody::Text(body.into());
+        self.halted = true;
+        self
+    }
+
+    /// 204 No Content.
+    pub fn no_content(mut self) -> Self {
+        self.status = StatusCode::NO_CONTENT;
+        self.body = ResponseBody::Empty;
+        self.halted = true;
+        self
+    }
+
+    /// 400 Bad Request with a JSON `{"error": msg}` body.
+    pub fn bad_request(self, msg: impl Into<String>) -> Self {
+        let body = format!("{{\"error\":\"{}\"}}", msg.into().replace('"', "\\\""));
+        self.put_status(StatusCode::BAD_REQUEST)
+            .put_resp_header("content-type", "application/json")
+            .text(body)
+    }
+
+    /// 401 Unauthorized.
+    pub fn unauthorized(self, msg: impl Into<String>) -> Self {
+        let body = format!("{{\"error\":\"{}\"}}", msg.into().replace('"', "\\\""));
+        self.put_status(StatusCode::UNAUTHORIZED)
+            .put_resp_header("content-type", "application/json")
+            .text(body)
+    }
+
+    /// 403 Forbidden.
+    pub fn forbidden(self, msg: impl Into<String>) -> Self {
+        let body = format!("{{\"error\":\"{}\"}}", msg.into().replace('"', "\\\""));
+        self.put_status(StatusCode::FORBIDDEN)
+            .put_resp_header("content-type", "application/json")
+            .text(body)
+    }
+
+    /// 404 Not Found.
+    pub fn not_found(self, msg: impl Into<String>) -> Self {
+        let body = format!("{{\"error\":\"{}\"}}", msg.into().replace('"', "\\\""));
+        self.put_status(StatusCode::NOT_FOUND)
+            .put_resp_header("content-type", "application/json")
+            .text(body)
+    }
+
+    /// 422 Unprocessable Entity — used for validation errors.
+    pub fn unprocessable_entity(self, msg: impl Into<String>) -> Self {
+        let body = format!("{{\"error\":\"{}\"}}", msg.into().replace('"', "\\\""));
+        self.put_status(StatusCode::UNPROCESSABLE_ENTITY)
+            .put_resp_header("content-type", "application/json")
+            .text(body)
+    }
+
+    /// 500 Internal Server Error.
+    pub fn internal_server_error(self, msg: impl Into<String>) -> Self {
+        let body = format!("{{\"error\":\"{}\"}}", msg.into().replace('"', "\\\""));
+        self.put_status(StatusCode::INTERNAL_SERVER_ERROR)
+            .put_resp_header("content-type", "application/json")
+            .text(body)
+    }
+
+    /// Return the request's HTTP method as a string (may differ from the actual
+    /// transport method after `MethodOverride` runs).
+    pub fn method(&self) -> &http::Method {
+        self.request.method()
+    }
+
+    /// Return the request's `Accept` header value, if any.
+    pub fn accept(&self) -> Option<&str> {
+        self.request
+            .headers()
+            .get(header::ACCEPT)
+            .and_then(|v| v.to_str().ok())
+    }
+
+    /// Return the request URI path.
+    pub fn path(&self) -> &str {
+        self.request.uri().path()
+    }
+
     // ── Conversion ────────────────────────────────────────────────────────────
 
     /// Convert the `Conn` into an `axum::Response`.
     pub fn into_response(self) -> axum::response::Response {
         use axum::response::Response;
-        
 
         let body_bytes = self.body.into_bytes();
         let mut builder = http::Response::builder().status(self.status);
 
         for (k, v) in &self.resp_headers {
             builder = builder.header(k, v);
+        }
+
+        // Write session back to cookie if it was modified
+        if self.session.is_dirty() {
+            let cookie_val = self.session.encode();
+            let cookie = format!(
+                "_aethos_session={cookie_val}; Path=/; HttpOnly; SameSite=Lax"
+            );
+            if let Ok(v) = HeaderValue::from_str(&cookie) {
+                builder = builder.header(header::SET_COOKIE, v);
+            }
         }
 
         builder
@@ -206,6 +326,28 @@ impl Conn {
                     .unwrap()
             })
     }
+}
+
+fn url_decode(s: &str) -> String {
+    let s = s.replace('+', " ");
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let h: String = chars.by_ref().take(2).collect();
+            if h.len() == 2 {
+                if let Ok(b) = u8::from_str_radix(&h, 16) {
+                    out.push(b as char);
+                    continue;
+                }
+            }
+            out.push('%');
+            out.push_str(&h);
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 impl std::fmt::Debug for Conn {

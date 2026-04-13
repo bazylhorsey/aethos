@@ -37,6 +37,20 @@ pub trait LiveView: Send + Sync + 'static {
         socket
     }
 
+    /// Handle URL parameter changes (called after `mount` and after `push_patch`).
+    ///
+    /// Analogous to `Phoenix.LiveView.handle_params/3`.
+    async fn handle_params(
+        _params: std::collections::HashMap<String, String>,
+        _url: &str,
+        socket: LiveSocket,
+    ) -> LiveSocket
+    where
+        Self: Sized,
+    {
+        socket
+    }
+
     /// Handle an internal message (from PubSub, timers, etc.)
     async fn handle_info(_msg: Value, socket: LiveSocket) -> LiveSocket
     where

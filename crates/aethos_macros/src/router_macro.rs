@@ -378,8 +378,14 @@ fn gen_route(r: &RouteDef, prefix: &LitStr, pipe_names: &[Ident]) -> TokenStream
     };
 
     quote! {
-        __router = __router.route(#path, #axum_method(|req: ::aethos::axum::extract::Request| async move {
-            let conn = ::aethos::Conn::new(req);
+        __router = __router.route(#path, #axum_method(|
+            path_params: Option<::aethos::axum::extract::Path<::std::collections::HashMap<String, String>>>,
+            req: ::aethos::axum::extract::Request,
+        | async move {
+            let mut conn = ::aethos::Conn::new(req);
+            if let Some(::aethos::axum::extract::Path(pp)) = path_params {
+                conn.params.extend_map(pp);
+            }
             #pipeline_calls
             let conn = #controller::#action(conn).await;
             conn.into_response()
@@ -480,26 +486,42 @@ fn gen_resources(r: &ResourcesDef, prefix: &LitStr, pipe_names: &[Ident]) -> Tok
                 let conn = #controller::create(conn).await;
                 conn.into_response()
             }))
-            .route(#show_path, ::aethos::axum::routing::get(|req: ::aethos::axum::extract::Request| async move {
-                let conn = ::aethos::Conn::new(req);
+            .route(#show_path, ::aethos::axum::routing::get(|
+                path_params: Option<::aethos::axum::extract::Path<::std::collections::HashMap<String, String>>>,
+                req: ::aethos::axum::extract::Request,
+            | async move {
+                let mut conn = ::aethos::Conn::new(req);
+                if let Some(::aethos::axum::extract::Path(pp)) = path_params { conn.params.extend_map(pp); }
                 #pc4
                 let conn = #controller::show(conn).await;
                 conn.into_response()
             }))
-            .route(#edit_path, ::aethos::axum::routing::get(|req: ::aethos::axum::extract::Request| async move {
-                let conn = ::aethos::Conn::new(req);
+            .route(#edit_path, ::aethos::axum::routing::get(|
+                path_params: Option<::aethos::axum::extract::Path<::std::collections::HashMap<String, String>>>,
+                req: ::aethos::axum::extract::Request,
+            | async move {
+                let mut conn = ::aethos::Conn::new(req);
+                if let Some(::aethos::axum::extract::Path(pp)) = path_params { conn.params.extend_map(pp); }
                 #pc5
                 let conn = #controller::edit(conn).await;
                 conn.into_response()
             }))
-            .route(#update_path, ::aethos::axum::routing::put(|req: ::aethos::axum::extract::Request| async move {
-                let conn = ::aethos::Conn::new(req);
+            .route(#update_path, ::aethos::axum::routing::put(|
+                path_params: Option<::aethos::axum::extract::Path<::std::collections::HashMap<String, String>>>,
+                req: ::aethos::axum::extract::Request,
+            | async move {
+                let mut conn = ::aethos::Conn::new(req);
+                if let Some(::aethos::axum::extract::Path(pp)) = path_params { conn.params.extend_map(pp); }
                 #pc6
                 let conn = #controller::update(conn).await;
                 conn.into_response()
             }))
-            .route(#delete_path, ::aethos::axum::routing::delete(|req: ::aethos::axum::extract::Request| async move {
-                let conn = ::aethos::Conn::new(req);
+            .route(#delete_path, ::aethos::axum::routing::delete(|
+                path_params: Option<::aethos::axum::extract::Path<::std::collections::HashMap<String, String>>>,
+                req: ::aethos::axum::extract::Request,
+            | async move {
+                let mut conn = ::aethos::Conn::new(req);
+                if let Some(::aethos::axum::extract::Path(pp)) = path_params { conn.params.extend_map(pp); }
                 #pc7
                 let conn = #controller::delete(conn).await;
                 conn.into_response()

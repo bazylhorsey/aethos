@@ -3,7 +3,8 @@ use axum::extract::ws::{Message, WebSocket};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use crate::{LiveView, LiveSocket};
+use crate::{LiveView, LiveSocket, socket::{NavigationAction, StreamOp}};
+use aethos_core::telemetry::{Telemetry, elapsed_ms};
 
 /// Per-connection LiveView WebSocket task.
 ///
@@ -54,14 +55,11 @@ where
             Some(msg) = info_rx.recv() => {
                 if let Some(socket) = live_socket.take() {
                     let new_socket = LV::handle_info(msg, socket).await;
-                    let new_html = LV::render(&new_socket).0;
-
-                    if new_html != last_html {
-                        let push = json!([null, null, joined_topic, "diff", {"0": new_html}]);
+                    let (new_socket, push) = build_push::<LV>(new_socket, &mut last_html, &joined_topic, None, None);
+                    if let Some(push) = push {
                         if ws_tx.send(Message::Text(push.to_string().into())).await.is_err() {
                             break;
                         }
-                        last_html = new_html;
                     }
                     live_socket = Some(new_socket);
                 }
@@ -71,6 +69,65 @@ where
 }
 
 type WsTx = futures::stream::SplitSink<WebSocket, Message>;
+
+/// Build a push message from the socket state after an update.
+/// Returns the (possibly updated) socket and an optional message to send.
+fn build_push<LV: LiveView>(
+    mut socket: LiveSocket,
+    last_html: &mut String,
+    topic: &str,
+    join_ref: Option<&Value>,
+    msg_ref: Option<&Value>,
+) -> (LiveSocket, Option<Value>) {
+    // Check for navigation first
+    if let Some(nav) = socket.take_navigation() {
+        let (event, url) = match nav {
+            NavigationAction::Navigate(url) => ("phx_navigate", url),
+            NavigationAction::Patch(url)    => ("phx_patch", url),
+        };
+        let push = json!([join_ref, msg_ref, topic, event, {"to": url}]);
+        return (socket, Some(push));
+    }
+
+    // Check for stream ops
+    let stream_ops = socket.take_stream_ops();
+    if !stream_ops.is_empty() {
+        let streams = build_streams_payload(&stream_ops);
+        let push = json!([join_ref, msg_ref, topic, "diff", {"streams": streams}]);
+        return (socket, Some(push));
+    }
+
+    // Normal diff
+    let new_html = LV::render(&socket).0;
+    if new_html != *last_html {
+        let push = json!([join_ref, msg_ref, topic, "diff", {"0": new_html}]);
+        *last_html = new_html;
+        (socket, Some(push))
+    } else {
+        (socket, None)
+    }
+}
+
+fn build_streams_payload(ops: &[StreamOp]) -> Value {
+    let entries: Vec<Value> = ops.iter().map(|op| match op {
+        StreamOp::Insert { name, id, item } => json!({
+            "op":   "insert",
+            "name": name,
+            "id":   id,
+            "item": item,
+        }),
+        StreamOp::Delete { name, id } => json!({
+            "op":   "delete",
+            "name": name,
+            "id":   id,
+        }),
+        StreamOp::Reset { name } => json!({
+            "op":   "reset",
+            "name": name,
+        }),
+    }).collect();
+    Value::Array(entries)
+}
 
 async fn handle_message<LV>(
     text: &str,
@@ -101,25 +158,39 @@ where
         // ── Mount ─────────────────────────────────────────────────────────────
         "phx_join" => {
             *joined_topic = topic.clone();
+            let start = std::time::Instant::now();
+            let url = payload["url"].as_str().unwrap_or("/").to_owned();
+
             let sock = LiveSocket::new(true);
             let sock = LV::mount(params.clone(), sock).await;
+            // Call handle_params after mount
+            let mut sock = LV::handle_params(params.clone(), &url, sock).await;
+
             let html = LV::render(&sock).0;
+            let flash_msgs = sock.take_flash_msgs();
+
+            // Build events array for flash messages
+            let events: Vec<Value> = flash_msgs.iter().map(|f| {
+                json!({"event": "put-flash", "payload": {"key": f.key, "msg": f.msg}})
+            }).collect();
+
+            let mut rendered = json!({"0": html, "s": ["", ""]});
+            if !events.is_empty() {
+                rendered["e"] = Value::Array(events);
+            }
 
             let reply = json!([
                 join_ref, msg_ref, topic, "phx_reply",
-                {
-                    "status": "ok",
-                    "response": {
-                        "rendered": {
-                            "0": html,
-                            "s": ["", ""]
-                        }
-                    }
-                }
+                {"status": "ok", "response": {"rendered": rendered}}
             ]);
             ws_tx.send(Message::Text(reply.to_string().into())).await?;
             *last_html = html;
             *live_socket = Some(sock);
+
+            // Emit telemetry
+            let mut meta = std::collections::HashMap::new();
+            meta.insert("view".into(), std::any::type_name::<LV>().into());
+            Telemetry::duration("aethos.live_view.mount", elapsed_ms(start), meta);
         }
 
         // ── Browser events ────────────────────────────────────────────────────
@@ -128,14 +199,52 @@ where
                 let ev_name  = payload["event"].as_str().unwrap_or("");
                 let ev_value = payload["value"].clone();
 
+                let start = std::time::Instant::now();
                 let new_sock = LV::handle_event(ev_name, ev_value, sock).await;
                 let new_html = LV::render(&new_sock).0;
 
-                let diff = if new_html != *last_html {
+                // Emit telemetry
+                let mut meta = std::collections::HashMap::new();
+                meta.insert("view".into(), std::any::type_name::<LV>().into());
+                meta.insert("event".into(), ev_name.to_owned());
+                Telemetry::duration("aethos.live_view.handle_event", elapsed_ms(start), meta);
+
+                // Check for navigation
+                let mut new_sock = new_sock;
+                if let Some(nav) = new_sock.take_navigation() {
+                    let (nav_event, url) = match nav {
+                        NavigationAction::Navigate(url) => ("phx_navigate", url),
+                        NavigationAction::Patch(url)    => ("phx_patch", url),
+                    };
+                    let reply = json!([join_ref, msg_ref, topic, "phx_reply",
+                        {"status": "ok", "response": {"diff": {}}}
+                    ]);
+                    ws_tx.send(Message::Text(reply.to_string().into())).await?;
+                    let nav_push = json!([null, null, topic, nav_event, {"to": url}]);
+                    ws_tx.send(Message::Text(nav_push.to_string().into())).await?;
+                    *live_socket = Some(new_sock);
+                    return Ok(());
+                }
+
+                // Collect flash messages
+                let flash_msgs = new_sock.take_flash_msgs();
+                let stream_ops = new_sock.take_stream_ops();
+
+                let mut diff = if !stream_ops.is_empty() {
+                    json!({"streams": build_streams_payload(&stream_ops)})
+                } else if new_html != *last_html {
                     json!({"0": new_html})
                 } else {
                     json!({})
                 };
+
+                // Embed flash events in diff
+                if !flash_msgs.is_empty() {
+                    let events: Vec<Value> = flash_msgs.iter().map(|f| {
+                        json!({"event": "put-flash", "payload": {"key": f.key, "msg": f.msg}})
+                    }).collect();
+                    diff["e"] = Value::Array(events);
+                }
 
                 let reply = json!([
                     join_ref, msg_ref, topic, "phx_reply",
@@ -168,3 +277,4 @@ where
 
     Ok(())
 }
+
