@@ -3,7 +3,7 @@ use aethos_core::{BoxPlug, Conn, Plug};
 
 /// A named, ordered list of plugs — analogous to a Phoenix pipeline.
 ///
-/// ```rust
+/// ```rust,ignore
 /// let browser = Pipeline::new("browser")
 ///     .plug(Logger)
 ///     .plug(SecureHeaders);

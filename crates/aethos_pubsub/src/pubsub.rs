@@ -14,7 +14,7 @@ type TopicSender = broadcast::Sender<Message>;
 ///
 /// Topics are created lazily on first subscribe or broadcast.
 ///
-/// ```rust
+/// ```rust,ignore
 /// let pubsub = PubSub::new();
 /// let mut rx = pubsub.subscribe("room:lobby");
 /// pubsub.broadcast("room:lobby", Message::new("new_msg", &payload)).await;

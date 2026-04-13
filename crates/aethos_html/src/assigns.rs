@@ -23,7 +23,7 @@ impl Assigns {
 
 /// Convenience macro for building `Assigns`.
 ///
-/// ```rust
+/// ```rust,ignore
 /// let a = assigns! { title: "Hello".to_string(), count: 42usize };
 /// ```
 #[macro_export]

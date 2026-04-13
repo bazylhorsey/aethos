@@ -56,3 +56,5 @@ impl From<Safe> for Html {
         Html(s.0)
     }
 }
+
+

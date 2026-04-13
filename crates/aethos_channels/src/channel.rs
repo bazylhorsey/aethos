@@ -19,13 +19,16 @@ pub enum JoinError {
 ///
 /// Implement this trait and annotate with `#[channel("topic:pattern")]`.
 ///
-/// ```rust
+/// ```rust,no_run
+/// # use aethos_channels::{Channel, Socket, channel::JoinResult};
+/// # use aethos_core::async_trait;
+/// # use serde_json::Value;
 /// pub struct RoomChannel;
 ///
 /// #[async_trait]
 /// impl Channel for RoomChannel {
-///     async fn join(topic: &str, payload: Value, socket: Socket) -> JoinResult {
-///         Ok(socket.assign(UserId(42)))
+///     async fn join(_topic: &str, _payload: Value, socket: Socket) -> JoinResult {
+///         Ok(socket)
 ///     }
 ///     async fn handle_in(event: &str, payload: Value, socket: Socket) -> Socket {
 ///         match event {

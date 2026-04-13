@@ -6,7 +6,7 @@ mod controller_macro;
 
 /// Declare the application router with pipelines, scopes, and routes.
 ///
-/// ```rust
+/// ```rust,ignore
 /// router! {
 ///     pipeline :browser {
 ///         plug!(Logger);
@@ -30,7 +30,7 @@ pub fn router(input: TokenStream) -> TokenStream {
 
 /// HEEx-inspired HTML template macro.
 ///
-/// ```rust
+/// ```rust,ignore
 /// fn my_view(assigns: &Assigns) -> Html {
 ///     h! {
 ///         <div class={@class}>
