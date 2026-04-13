@@ -41,7 +41,7 @@ pub use aethos_html::assigns;
 
 /// Database access — schema, repo, changeset, query DSL, migrations.
 pub mod orm {
-    pub use aethos_orm::{Repo, Schema, Changeset, ChangesetError, Query, MigrationRunner, OrmError, sqlx, chrono, uuid};
+    pub use aethos_orm::{Repo, PoolConfig, Schema, Changeset, ChangesetError, Query, MigrationRunner, OrmError, sqlx, chrono, uuid};
 }
 
 /// Telemetry event types and helpers.

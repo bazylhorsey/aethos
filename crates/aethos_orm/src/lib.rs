@@ -17,7 +17,7 @@ pub mod query;
 pub mod migration;
 pub mod error;
 
-pub use repo::{Repo, AnyPool};
+pub use repo::{Repo, AnyPool, PoolConfig};
 pub use schema::Schema;
 pub use changeset::{Changeset, ChangesetError};
 pub use query::Query;
