@@ -51,26 +51,29 @@ where
 }
 
 /// Build a composed plug chain from a list of plugs.
-/// The last plug in the list calls the terminal next.
+///
+/// The plugs are wrapped in `Arc<[_]>` so the slice is shared across the
+/// recursive chain without cloning the entire `Vec` at every level.
 pub fn compose(plugs: Vec<BoxPlug>) -> impl Fn(Conn) -> BoxFuture<Conn> + Clone + Send + Sync {
+    let plugs: Arc<[BoxPlug]> = plugs.into();
     move |conn: Conn| {
-        let plugs = plugs.clone();
+        let plugs = Arc::clone(&plugs);
         Box::pin(run_chain(conn, plugs, 0)) as BoxFuture<Conn>
     }
 }
 
 fn run_chain(
     conn: Conn,
-    plugs: Vec<BoxPlug>,
+    plugs: Arc<[BoxPlug]>,
     idx: usize,
 ) -> Pin<Box<dyn Future<Output = Conn> + Send>> {
     Box::pin(async move {
         if conn.halted || idx >= plugs.len() {
             return conn;
         }
-        let plug = plugs[idx].clone();
+        let plug = Arc::clone(&plugs[idx]);
         let next = Next::new(move |c: Conn| {
-            let plugs = plugs.clone();
+            let plugs = Arc::clone(&plugs);
             Box::pin(run_chain(c, plugs, idx + 1)) as BoxFuture<Conn>
         });
         plug.call(conn, next).await

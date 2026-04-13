@@ -228,7 +228,7 @@ impl Conn {
 
     /// 400 Bad Request with a JSON `{"error": msg}` body.
     pub fn bad_request(self, msg: impl Into<String>) -> Self {
-        let body = format!("{{\"error\":\"{}\"}}", msg.into().replace('"', "\\\""));
+        let body = serde_json::json!({"error": msg.into()}).to_string();
         self.put_status(StatusCode::BAD_REQUEST)
             .put_resp_header("content-type", "application/json")
             .text(body)
@@ -236,7 +236,7 @@ impl Conn {
 
     /// 401 Unauthorized.
     pub fn unauthorized(self, msg: impl Into<String>) -> Self {
-        let body = format!("{{\"error\":\"{}\"}}", msg.into().replace('"', "\\\""));
+        let body = serde_json::json!({"error": msg.into()}).to_string();
         self.put_status(StatusCode::UNAUTHORIZED)
             .put_resp_header("content-type", "application/json")
             .text(body)
@@ -244,7 +244,7 @@ impl Conn {
 
     /// 403 Forbidden.
     pub fn forbidden(self, msg: impl Into<String>) -> Self {
-        let body = format!("{{\"error\":\"{}\"}}", msg.into().replace('"', "\\\""));
+        let body = serde_json::json!({"error": msg.into()}).to_string();
         self.put_status(StatusCode::FORBIDDEN)
             .put_resp_header("content-type", "application/json")
             .text(body)
@@ -252,7 +252,7 @@ impl Conn {
 
     /// 404 Not Found.
     pub fn not_found(self, msg: impl Into<String>) -> Self {
-        let body = format!("{{\"error\":\"{}\"}}", msg.into().replace('"', "\\\""));
+        let body = serde_json::json!({"error": msg.into()}).to_string();
         self.put_status(StatusCode::NOT_FOUND)
             .put_resp_header("content-type", "application/json")
             .text(body)
@@ -260,7 +260,7 @@ impl Conn {
 
     /// 422 Unprocessable Entity — used for validation errors.
     pub fn unprocessable_entity(self, msg: impl Into<String>) -> Self {
-        let body = format!("{{\"error\":\"{}\"}}", msg.into().replace('"', "\\\""));
+        let body = serde_json::json!({"error": msg.into()}).to_string();
         self.put_status(StatusCode::UNPROCESSABLE_ENTITY)
             .put_resp_header("content-type", "application/json")
             .text(body)
@@ -268,7 +268,7 @@ impl Conn {
 
     /// 500 Internal Server Error.
     pub fn internal_server_error(self, msg: impl Into<String>) -> Self {
-        let body = format!("{{\"error\":\"{}\"}}", msg.into().replace('"', "\\\""));
+        let body = serde_json::json!({"error": msg.into()}).to_string();
         self.put_status(StatusCode::INTERNAL_SERVER_ERROR)
             .put_resp_header("content-type", "application/json")
             .text(body)
@@ -329,25 +329,33 @@ impl Conn {
 }
 
 fn url_decode(s: &str) -> String {
+    // Replace '+' with space, then decode %XX sequences as UTF-8 bytes.
     let s = s.replace('+', " ");
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            let h: String = chars.by_ref().take(2).collect();
-            if h.len() == 2 {
-                if let Ok(b) = u8::from_str_radix(&h, 16) {
-                    out.push(b as char);
-                    continue;
-                }
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (hex_val(bytes[i+1]), hex_val(bytes[i+2])) {
+                out.push((hi << 4) | lo);
+                i += 3;
+                continue;
             }
-            out.push('%');
-            out.push_str(&h);
-        } else {
-            out.push(c);
         }
+        out.push(bytes[i]);
+        i += 1;
     }
-    out
+    String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+}
+
+#[inline]
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 impl std::fmt::Debug for Conn {

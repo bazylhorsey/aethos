@@ -3,7 +3,7 @@ use http::StatusCode;
 use rand::RngCore;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
-use crate::{Conn, plug::{Next, Plug}};
+use crate::{Conn, plug::{Next, Plug}, crypto::constant_time_eq};
 
 pub(crate) const CSRF_SESSION_KEY: &str = "_csrf_token";
 
@@ -91,11 +91,4 @@ fn generate_token() -> String {
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
-}
-
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }

@@ -3,7 +3,7 @@ use axum::response::Response;
 use serde_json::Value;
 
 use aethos_core::Conn;
-use aethos_html::Html;
+use aethos_html::Template;
 
 use crate::LiveSocket;
 
@@ -14,7 +14,8 @@ pub type Params = std::collections::HashMap<String, String>;
 ///
 /// Lifecycle:
 /// 1. `mount` — initial state setup (called twice: static render + WS connect)
-/// 2. `render` — returns an `Html` fragment from the current socket assigns
+/// 2. `render` — returns a `Template` from the current socket assigns;
+///    only changed dynamic slots are transmitted on updates (binary diff)
 /// 3. `handle_event` — reacts to browser events (`phx-click`, `phx-submit`, etc.)
 /// 4. `handle_info` — reacts to internal Tokio/PubSub messages
 #[async_trait]
@@ -24,8 +25,11 @@ pub trait LiveView: Send + Sync + 'static {
     where
         Self: Sized;
 
-    /// Render the current state into HTML.
-    fn render(socket: &LiveSocket) -> Html
+    /// Render the current state as a `Template`.
+    ///
+    /// The `h!` macro returns a `Template` automatically. The framework diffs
+    /// successive renders and only sends changed dynamic slots over the wire.
+    fn render(socket: &LiveSocket) -> Template
     where
         Self: Sized;
 
@@ -68,7 +72,7 @@ pub trait LiveView: Send + Sync + 'static {
         let params = extract_params(&conn);
         let socket = LiveSocket::new(false);
         let socket = Self::mount(params, socket).await;
-        let html   = Self::render(&socket);
+        let html   = Self::render(&socket).render_string();
 
         let page = format!(
             r#"<!DOCTYPE html>
@@ -84,7 +88,7 @@ pub trait LiveView: Send + Sync + 'static {
   </div>
 </body>
 </html>"#,
-            html.as_str()
+            html
         );
 
         conn.html(page).into_response()

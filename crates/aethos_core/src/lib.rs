@@ -8,6 +8,8 @@ pub mod type_map;
 pub mod plugs;
 pub mod session;
 pub mod telemetry;
+pub mod crypto;
+pub mod supervisor;
 
 pub use conn::Conn;
 pub use plug::{Plug, Next, BoxPlug};
@@ -18,6 +20,7 @@ pub use error::AethosError;
 pub use type_map::TypeMap;
 pub use session::{Session, set_session_secret};
 pub use telemetry::Telemetry;
+pub use supervisor::{Supervisor, ChildSpec, RestartConfig, RestartPolicy};
 
 pub use async_trait::async_trait;
 pub use axum;

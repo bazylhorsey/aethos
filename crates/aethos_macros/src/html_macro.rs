@@ -29,14 +29,9 @@ use syn::Result;
 pub fn expand(input: TokenStream) -> Result<TokenStream> {
     let mut cursor = Cursor::new(input);
     let nodes = parse_nodes(&mut cursor, None)?;
-    let stmts = gen_nodes(&nodes);
-    Ok(quote! {
-        {
-            let mut __html = ::std::string::String::new();
-            #stmts
-            ::aethos::Html(__html)
-        }
-    })
+    let mut builder = TemplateBuilder::new();
+    gen_nodes_into(&nodes, &mut builder);
+    Ok(builder.finish())
 }
 
 // ── AST ───────────────────────────────────────────────────────────────────────
@@ -493,112 +488,177 @@ fn transform_assigns(ts: TokenStream) -> TokenStream {
 }
 
 // ── Code generation ───────────────────────────────────────────────────────────
+//
+// Templates are represented as statics (compile-time string fragments) + dynamics
+// (runtime expression values). The h! macro collects these into a TemplateBuilder
+// which emits code that constructs an `aethos::Template` at runtime.
+//
+// Rules:
+//   • Static text / static attrs  → accumulated into the current static buffer
+//   • Dynamic expressions         → flush static buffer, add a new dynamic slot
+//   • :if / :for / components     → rendered to a String, single dynamic slot
+// ─────────────────────────────────────────────────────────────────────────────
 
-fn gen_nodes(nodes: &[Node]) -> TokenStream {
-    let stmts: Vec<TokenStream> = nodes.iter().map(gen_node).collect();
-    quote! { #(#stmts)* }
+struct TemplateBuilder {
+    /// Finalized static fragments (one per `push_dynamic` call, plus one at the end).
+    statics: Vec<String>,
+    /// Runtime dynamic expression code snippets, each produces a `String`.
+    dynamics: Vec<TokenStream>,
+    /// Pending static text not yet flushed.
+    current_static: String,
 }
 
-fn gen_node(node: &Node) -> TokenStream {
+impl TemplateBuilder {
+    fn new() -> Self {
+        Self { statics: vec![], dynamics: vec![], current_static: String::new() }
+    }
+
+    fn push_static(&mut self, s: &str) {
+        self.current_static.push_str(s);
+    }
+
+    /// Flush pending static, record a new dynamic slot.
+    /// `code` must be a TokenStream that evaluates to `String`.
+    fn push_dynamic(&mut self, code: TokenStream) {
+        let s = std::mem::take(&mut self.current_static);
+        self.statics.push(s);
+        self.dynamics.push(code);
+    }
+
+    /// Generate code that builds an `aethos::Template`.
+    fn finish(mut self) -> TokenStream {
+        self.statics.push(self.current_static);
+        let statics: Vec<_> = self.statics.iter().map(|s| s.as_str()).collect();
+        let dynamics = &self.dynamics;
+        quote! {
+            ::aethos::Template {
+                statics: vec![#(#statics),*],
+                dynamics: vec![#(#dynamics),*],
+            }
+        }
+    }
+
+    /// Generate code that builds a `String` (for embedding as a dynamic slot).
+    fn finish_string(mut self) -> TokenStream {
+        self.statics.push(self.current_static);
+        let statics: Vec<_> = self.statics.iter().map(|s| s.as_str()).collect();
+        let dynamics = &self.dynamics;
+        if dynamics.is_empty() {
+            // Pure static — emit a string literal
+            let combined: String = self.statics.join("");
+            return quote! { ::std::string::String::from(#combined) };
+        }
+        let mut pieces: Vec<TokenStream> = Vec::new();
+        for (i, s) in statics.iter().enumerate() {
+            pieces.push(quote! { __sb.push_str(#s); });
+            if i < dynamics.len() {
+                let d = &dynamics[i];
+                pieces.push(quote! { __sb.push_str(&#d); });
+            }
+        }
+        quote! {
+            {
+                let mut __sb = ::std::string::String::new();
+                #(#pieces)*
+                __sb
+            }
+        }
+    }
+}
+
+fn gen_nodes_into(nodes: &[Node], b: &mut TemplateBuilder) {
+    for node in nodes { gen_node_into(node, b); }
+}
+
+fn gen_node_into(node: &Node, b: &mut TemplateBuilder) {
     match node {
-        Node::Text(s) => {
-            let e = escape_static(s);
-            quote! { __html.push_str(#e); }
-        }
-        Node::Expr(ts) => quote! {
-            __html.push_str(&::aethos::html_escape(&format!("{}", #ts)));
-        },
-        Node::RawExpr(ts) => quote! {
-            __html.push_str(&format!("{}", #ts));
-        },
-        Node::Component(c) => gen_component(c),
-        Node::Element(e)   => gen_element(e),
+        Node::Text(s) => b.push_static(&escape_static(s)),
+        Node::Expr(ts) => b.push_dynamic(quote! {
+            ::aethos::html_escape(&::std::format!("{}", #ts))
+        }),
+        Node::RawExpr(ts) => b.push_dynamic(quote! {
+            ::std::format!("{}", #ts)
+        }),
+        Node::Element(e)   => gen_element_into(e, b),
+        Node::Component(c) => gen_component_into(c, b),
     }
 }
 
-fn gen_element(e: &Element) -> TokenStream {
-    let inner = gen_element_inner(e);
-    let wrapped = if let Some((pat, expr)) = &e.for_binding {
-        quote! { for #pat in #expr { #inner } }
-    } else { inner };
+fn gen_element_into(e: &Element, b: &mut TemplateBuilder) {
+    // :for — render inner element to string, one dynamic slot
+    if let Some((pat, expr)) = &e.for_binding {
+        let mut inner = TemplateBuilder::new();
+        gen_element_bare_into(e, &mut inner);
+        let inner_str = inner.finish_string();
+        b.push_dynamic(quote! {
+            { let mut __acc = ::std::string::String::new(); for #pat in #expr { __acc.push_str(&#inner_str); } __acc }
+        });
+        return;
+    }
+    // :if — render inner element to string, one dynamic slot
     if let Some(cond) = &e.if_cond {
-        quote! { if #cond { #wrapped } }
-    } else { wrapped }
+        let mut inner = TemplateBuilder::new();
+        gen_element_bare_into(e, &mut inner);
+        let inner_str = inner.finish_string();
+        b.push_dynamic(quote! {
+            if #cond { #inner_str } else { ::std::string::String::new() }
+        });
+        return;
+    }
+    gen_element_bare_into(e, b);
 }
 
-fn gen_element_inner(e: &Element) -> TokenStream {
+/// Generate element HTML without processing :if/:for (used when wrapping them above).
+fn gen_element_bare_into(e: &Element, b: &mut TemplateBuilder) {
     let tag = &e.tag;
-    let open = format!("<{tag}");
-    let attr_ts: Vec<TokenStream> = e.attrs.iter().map(gen_attr).collect();
-    let children = gen_nodes(&e.children);
+    b.push_static(&format!("<{tag}"));
+    for attr in &e.attrs { gen_attr_into(attr, b); }
     if e.self_closing {
-        quote! {
-            __html.push_str(#open);
-            #(#attr_ts)*
-            __html.push_str(" />");
-        }
+        b.push_static(" />");
     } else {
-        let close = format!("</{tag}>");
-        quote! {
-            __html.push_str(#open);
-            #(#attr_ts)*
-            __html.push_str(">");
-            #children
-            __html.push_str(#close);
-        }
+        b.push_static(">");
+        gen_nodes_into(&e.children, b);
+        b.push_static(&format!("</{tag}>"));
     }
 }
 
-fn gen_attr(a: &Attr) -> TokenStream {
+fn gen_attr_into(a: &Attr, b: &mut TemplateBuilder) {
     let name = &a.name;
     match &a.value {
-        AttrValue::Bool => quote! {
-            __html.push_str(concat!(" ", #name));
-        },
-        AttrValue::Static(s) => {
-            let r = format!(" {name}=\"{s}\"");
-            quote! { __html.push_str(#r); }
+        AttrValue::Bool        => b.push_static(&format!(" {name}")),
+        AttrValue::Static(s)   => b.push_static(&format!(" {name}=\"{s}\"")),
+        AttrValue::Dynamic(ts) => {
+            b.push_static(&format!(" {name}=\""));
+            b.push_dynamic(quote! {
+                ::aethos::html_escape(&::std::format!("{}", #ts))
+            });
+            b.push_static("\"");
         }
-        AttrValue::Dynamic(ts) => quote! {
-            __html.push_str(&format!(
-                " {}=\"{}\"",
-                #name,
-                ::aethos::html_escape(&format!("{}", #ts))
-            ));
-        },
     }
 }
 
-fn gen_component(c: &Component) -> TokenStream {
-    let n = proc_macro2::Ident::new(&c.name, Span::call_site());
+fn gen_component_into(c: &Component, b: &mut TemplateBuilder) {
+    let n  = proc_macro2::Ident::new(&c.name, Span::call_site());
     let attr_calls: Vec<TokenStream> = c.attrs.iter().map(|a| match &a.value {
         AttrValue::Dynamic(ts) => quote! { .put(#ts) },
         AttrValue::Static(s)   => quote! { .put(#s.to_string()) },
         AttrValue::Bool        => quote! {},
     }).collect();
 
-    // Named slots: <:header>...</:header>
+    // Named slots — rendered to Html (pre-rendered string)
     let slot_calls: Vec<TokenStream> = c.named_slots.iter().map(|(name, children)| {
-        let body = gen_nodes(children);
-        quote! {
-            .put_slot(#name, {
-                let mut __html = ::std::string::String::new();
-                #body
-                ::aethos::Html(__html)
-            })
-        }
+        let mut sb = TemplateBuilder::new();
+        gen_nodes_into(children, &mut sb);
+        let html_str = sb.finish_string();
+        quote! { .put_slot(#name, ::aethos::Html(#html_str)) }
     }).collect();
 
-    // inner_block: non-slot children between open/close tags
+    // inner_block — non-slot children
     let inner_block_call = if !c.inner_block.is_empty() {
-        let body = gen_nodes(&c.inner_block);
-        quote! {
-            .put_slot("inner_block", {
-                let mut __html = ::std::string::String::new();
-                #body
-                ::aethos::Html(__html)
-            })
-        }
+        let mut ib = TemplateBuilder::new();
+        gen_nodes_into(&c.inner_block, &mut ib);
+        let html_str = ib.finish_string();
+        quote! { .put_slot("inner_block", ::aethos::Html(#html_str)) }
     } else {
         quote! {}
     };
@@ -609,12 +669,14 @@ fn gen_component(c: &Component) -> TokenStream {
     } else {
         quote! { #n }
     };
-    quote! {
+
+    // Component returns Template; render to String for embedding as a dynamic slot.
+    b.push_dynamic(quote! {
         {
             let __ca = ::aethos::Assigns::new()#(#attr_calls)*#(#slot_calls)*#inner_block_call;
-            __html.push_str(&#call(&__ca).0);
+            #call(&__ca).render_string()
         }
-    }
+    });
 }
 
 /// Escape a static string literal at macro-expansion time.
@@ -628,3 +690,4 @@ fn escape_static(s: &str) -> String {
         _    => vec![c],
     }).collect()
 }
+

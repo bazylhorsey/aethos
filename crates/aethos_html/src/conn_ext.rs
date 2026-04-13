@@ -8,12 +8,13 @@ pub struct PageTitle(pub String);
 pub trait ConnHtmlExt {
     /// Wrap `html` in the default root layout and send as an HTML response.
     ///
-    /// Reads `CsrfToken` and `PageTitle` from `conn.assigns` if present.
-    fn render(self, html: Html) -> Conn;
+    /// Accepts `Html` or `Template` (via `Into<Html>`).
+    fn render(self, html: impl Into<Html>) -> Conn;
 }
 
 impl ConnHtmlExt for Conn {
-    fn render(self, html: Html) -> Conn {
+    fn render(self, html: impl Into<Html>) -> Conn {
+        let html: Html = html.into();
         let title = self.assigns.get::<PageTitle>().map(|t| t.0.clone());
         let csrf = self.assigns.get::<CsrfToken>().map(|t| t.0.clone());
 

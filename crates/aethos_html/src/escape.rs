@@ -1,8 +1,15 @@
 /// Escape a string for safe insertion into HTML content or attribute values.
 ///
 /// Replaces `&`, `<`, `>`, `"`, and `'` with their HTML entities.
+/// Uses a byte scan so that ASCII-clean strings are handled without allocation.
 pub fn html_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+    // Fast path: scan bytes for any character that needs escaping.
+    let needs_escape = s.bytes().any(|b| matches!(b, b'&' | b'<' | b'>' | b'"' | b'\''));
+    if !needs_escape {
+        return s.to_owned();
+    }
+
+    let mut out = String::with_capacity(s.len() + 16);
     for c in s.chars() {
         match c {
             '&'  => out.push_str("&amp;"),

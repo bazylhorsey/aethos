@@ -5,15 +5,39 @@ use tokio::sync::mpsc;
 
 use crate::{LiveView, LiveSocket, socket::{NavigationAction, StreamOp}};
 use aethos_core::telemetry::{Telemetry, elapsed_ms};
+use aethos_html::Template;
 
 /// Per-connection LiveView WebSocket task.
 ///
 /// Handles the Phoenix wire protocol over an Axum WebSocket:
-/// - `phx_join`   → mount the LiveView and send initial rendered HTML
-/// - `event`      → dispatch to `handle_event`, send back diff
+/// - `phx_join`   → mount the LiveView and send initial rendered template
+/// - `event`      → dispatch to `handle_event`, send binary diff (only changed slots)
 /// - `heartbeat`  → respond with pong
 /// - server-initiated updates via `handle_info` (through an internal channel)
+///
+/// The inner loop runs in a spawned task so that panics in user LiveView code
+/// (mount, render, handle_event) are caught, logged, and result in a clean
+/// WebSocket close rather than silently killing an Axum worker thread.
 pub async fn handle_live_socket<LV>(socket: WebSocket, params: std::collections::HashMap<String, String>)
+where
+    LV: LiveView + Default,
+{
+    let handle = tokio::task::spawn(live_socket_loop::<LV>(socket, params));
+    match handle.await {
+        Ok(()) => {}
+        Err(e) if e.is_panic() => {
+            tracing::error!(
+                view = std::any::type_name::<LV>(),
+                "LiveView connection panicked — client will reconnect: {e:?}"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(view = std::any::type_name::<LV>(), "LiveView task cancelled: {e:?}");
+        }
+    }
+}
+
+async fn live_socket_loop<LV>(socket: WebSocket, params: std::collections::HashMap<String, String>)
 where
     LV: LiveView + Default,
 {
@@ -21,7 +45,7 @@ where
     let (info_tx, mut info_rx) = mpsc::unbounded_channel::<Value>();
 
     let mut live_socket: Option<LiveSocket> = None;
-    let mut last_html: String = String::new();
+    let mut prev_template: Option<Template> = None;
     let mut joined_topic: String = String::new();
 
     loop {
@@ -36,7 +60,7 @@ where
                             &text,
                             &mut ws_tx,
                             &mut live_socket,
-                            &mut last_html,
+                            &mut prev_template,
                             &mut joined_topic,
                             &params,
                             info_tx.clone(),
@@ -55,7 +79,9 @@ where
             Some(msg) = info_rx.recv() => {
                 if let Some(socket) = live_socket.take() {
                     let new_socket = LV::handle_info(msg, socket).await;
-                    let (new_socket, push) = build_push::<LV>(new_socket, &mut last_html, &joined_topic, None, None);
+                    let (new_socket, push) = build_push::<LV>(
+                        new_socket, &mut prev_template, &joined_topic, None, None,
+                    );
                     if let Some(push) = push {
                         if ws_tx.send(Message::Text(push.to_string().into())).await.is_err() {
                             break;
@@ -70,11 +96,48 @@ where
 
 type WsTx = futures::stream::SplitSink<WebSocket, Message>;
 
+/// Build the JSON diff payload comparing `next` against `prev`.
+///
+/// - First render (prev = None): returns `{"s": [...statics...], "0": val, "1": val, …}`
+/// - Same structure: returns only changed slots `{"1": new_val}` (may be `{}` if nothing changed)
+/// - Structure changed (different number of dynamic slots): returns full initial render
+fn template_diff_json(next: &Template, prev: Option<&Template>) -> Value {
+    match prev {
+        None => template_initial_json(next),
+        Some(prev) => match next.diff_pairs(prev) {
+            None => {
+                // Structural change — full re-render with statics
+                template_initial_json(next)
+            }
+            Some(pairs) => {
+                let mut obj = serde_json::Map::new();
+                for (i, val) in pairs {
+                    obj.insert(i.to_string(), Value::String(val.to_owned()));
+                }
+                Value::Object(obj)
+            }
+        },
+    }
+}
+
+/// Full initial render JSON: `{"s": [...statics...], "0": val, "1": val, …}`.
+fn template_initial_json(t: &Template) -> Value {
+    let mut obj = serde_json::Map::new();
+    let statics: Vec<Value> = t.statics.iter()
+        .map(|s| Value::String(s.to_string()))
+        .collect();
+    obj.insert("s".into(), Value::Array(statics));
+    for (i, d) in t.dynamics.iter().enumerate() {
+        obj.insert(i.to_string(), Value::String(d.clone()));
+    }
+    Value::Object(obj)
+}
+
 /// Build a push message from the socket state after an update.
 /// Returns the (possibly updated) socket and an optional message to send.
 fn build_push<LV: LiveView>(
     mut socket: LiveSocket,
-    last_html: &mut String,
+    prev_template: &mut Option<Template>,
     topic: &str,
     join_ref: Option<&Value>,
     msg_ref: Option<&Value>,
@@ -97,11 +160,18 @@ fn build_push<LV: LiveView>(
         return (socket, Some(push));
     }
 
-    // Normal diff
-    let new_html = LV::render(&socket).0;
-    if new_html != *last_html {
-        let push = json!([join_ref, msg_ref, topic, "diff", {"0": new_html}]);
-        *last_html = new_html;
+    // Compute template diff
+    let new_template = LV::render(&socket);
+    let diff = template_diff_json(&new_template, prev_template.as_ref());
+
+    // Only send if something changed (or no prev template yet)
+    let has_changes = prev_template.as_ref()
+        .map(|p| !new_template.is_same_as(p))
+        .unwrap_or(true);
+
+    if has_changes {
+        let push = json!([join_ref, msg_ref, topic, "diff", diff]);
+        *prev_template = Some(new_template);
         (socket, Some(push))
     } else {
         (socket, None)
@@ -133,7 +203,7 @@ async fn handle_message<LV>(
     text: &str,
     ws_tx: &mut WsTx,
     live_socket: &mut Option<LiveSocket>,
-    last_html: &mut String,
+    prev_template: &mut Option<Template>,
     joined_topic: &mut String,
     params: &std::collections::HashMap<String, String>,
     _info_tx: mpsc::UnboundedSender<Value>,
@@ -163,19 +233,16 @@ where
 
             let sock = LiveSocket::new(true);
             let sock = LV::mount(params.clone(), sock).await;
-            // Call handle_params after mount
             let mut sock = LV::handle_params(params.clone(), &url, sock).await;
 
-            let html = LV::render(&sock).0;
+            let template = LV::render(&sock);
             let flash_msgs = sock.take_flash_msgs();
 
-            // Build events array for flash messages
-            let events: Vec<Value> = flash_msgs.iter().map(|f| {
-                json!({"event": "put-flash", "payload": {"key": f.key, "msg": f.msg}})
-            }).collect();
-
-            let mut rendered = json!({"0": html, "s": ["", ""]});
-            if !events.is_empty() {
+            let mut rendered = template_initial_json(&template);
+            if !flash_msgs.is_empty() {
+                let events: Vec<Value> = flash_msgs.iter().map(|f| {
+                    json!({"event": "put-flash", "payload": {"key": f.key, "msg": f.msg}})
+                }).collect();
                 rendered["e"] = Value::Array(events);
             }
 
@@ -184,10 +251,9 @@ where
                 {"status": "ok", "response": {"rendered": rendered}}
             ]);
             ws_tx.send(Message::Text(reply.to_string().into())).await?;
-            *last_html = html;
+            *prev_template = Some(template);
             *live_socket = Some(sock);
 
-            // Emit telemetry
             let mut meta = std::collections::HashMap::new();
             meta.insert("view".into(), std::any::type_name::<LV>().into());
             Telemetry::duration("aethos.live_view.mount", elapsed_ms(start), meta);
@@ -200,17 +266,14 @@ where
                 let ev_value = payload["value"].clone();
 
                 let start = std::time::Instant::now();
-                let new_sock = LV::handle_event(ev_name, ev_value, sock).await;
-                let new_html = LV::render(&new_sock).0;
+                let mut new_sock = LV::handle_event(ev_name, ev_value, sock).await;
 
-                // Emit telemetry
                 let mut meta = std::collections::HashMap::new();
                 meta.insert("view".into(), std::any::type_name::<LV>().into());
                 meta.insert("event".into(), ev_name.to_owned());
                 Telemetry::duration("aethos.live_view.handle_event", elapsed_ms(start), meta);
 
-                // Check for navigation
-                let mut new_sock = new_sock;
+                // Navigation short-circuit
                 if let Some(nav) = new_sock.take_navigation() {
                     let (nav_event, url) = match nav {
                         NavigationAction::Navigate(url) => ("phx_navigate", url),
@@ -226,19 +289,18 @@ where
                     return Ok(());
                 }
 
-                // Collect flash messages
                 let flash_msgs = new_sock.take_flash_msgs();
                 let stream_ops = new_sock.take_stream_ops();
 
                 let mut diff = if !stream_ops.is_empty() {
                     json!({"streams": build_streams_payload(&stream_ops)})
-                } else if new_html != *last_html {
-                    json!({"0": new_html})
                 } else {
-                    json!({})
+                    let new_template = LV::render(&new_sock);
+                    let d = template_diff_json(&new_template, prev_template.as_ref());
+                    *prev_template = Some(new_template);
+                    d
                 };
 
-                // Embed flash events in diff
                 if !flash_msgs.is_empty() {
                     let events: Vec<Value> = flash_msgs.iter().map(|f| {
                         json!({"event": "put-flash", "payload": {"key": f.key, "msg": f.msg}})
@@ -251,7 +313,6 @@ where
                     {"status": "ok", "response": {"diff": diff}}
                 ]);
                 ws_tx.send(Message::Text(reply.to_string().into())).await?;
-                *last_html = new_html;
                 *live_socket = Some(new_sock);
             }
         }

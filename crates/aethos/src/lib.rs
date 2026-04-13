@@ -5,11 +5,12 @@ pub use aethos_core::{
     Conn, Plug, Next, BoxPlug, Params, FlashMap, ResponseBody, AethosError, TypeMap,
     async_trait, axum, bytes, http, serde, serde_json, tower, tracing,
     Telemetry,
+    Supervisor, ChildSpec, RestartConfig, RestartPolicy,
 };
 
 pub use aethos_router::{Pipeline, Endpoint};
 
-pub use aethos_html::{Html, Assigns, html_escape, Safe, default_root_layout, InnerContent, ConnHtmlExt};
+pub use aethos_html::{Html, Assigns, html_escape, Safe, default_root_layout, InnerContent, ConnHtmlExt, Template};
 pub use aethos_html::conn_ext::PageTitle;
 
 pub use aethos_pubsub::{PubSub, Message};

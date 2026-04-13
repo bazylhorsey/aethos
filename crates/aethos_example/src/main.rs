@@ -12,6 +12,7 @@ use aethos::{
     Conn,
     ConnHtmlExt,
     Html,
+    Template,
     Endpoint,
     Logger,
     BodyParser,
@@ -101,7 +102,7 @@ impl LiveView for CounterLive {
         socket.assign(Count(0))
     }
 
-    fn render(socket: &LiveSocket) -> Html {
+    fn render(socket: &LiveSocket) -> Template {
         let count = socket.get_assign::<Count>().map(|c| c.0).unwrap_or(0);
         h! {
             <div class="counter">

@@ -22,6 +22,12 @@ impl Html {
         &self.0
     }
 
+    /// Alias for the inner string — allows component functions returning `Html`
+    /// to be called from `h!`-generated code which calls `.render_string()`.
+    pub fn render_string(&self) -> String {
+        self.0.clone()
+    }
+
     /// Concatenate another `Html` fragment.
     pub fn append(mut self, other: Html) -> Self {
         self.0.push_str(&other.0);

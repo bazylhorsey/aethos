@@ -275,7 +275,7 @@ impl {name}Controller {{
 
 fn scaffold_live(name: &str) -> String {
     format!(
-        r#"use aethos::{{LiveView, LiveSocket, Html}};
+        r#"use aethos::{{LiveView, LiveSocket, Template, Html}};
 use async_trait::async_trait;
 use std::collections::HashMap;
 
@@ -287,12 +287,12 @@ impl LiveView for {name}Live {{
         socket.assign(Count(0))
     }}
 
-    fn render(socket: &LiveSocket) -> Html {{
+    fn render(socket: &LiveSocket) -> Template {{
         let count = socket.get_assign::<Count>().unwrap_or(Count(0)).0;
-        Html::new(format!(
+        Template::from(Html::new(format!(
             "<div><p>Count: {{}}</p><button phx-click=\"inc\">+</button></div>",
             count
-        ))
+        )))
     }}
 
     async fn handle_event(event: &str, _payload: serde_json::Value, socket: LiveSocket) -> LiveSocket {{

@@ -112,29 +112,63 @@ class AethosLive {
 
   // ── DOM patching ───────────────────────────────────────────────────────────
 
-  _applyRendered(rendered) {
-    // rendered = {"0": html, "s": [...], "e": [{event, payload}]}
-    if (rendered["0"] !== undefined) {
-      _destroyHooks(this.root);
-      this.root.innerHTML = rendered["0"];
-      this._bindEvents();
-      _mountHooks(this.root, this);
+  /** Interleave stored statics and dynamics to produce the full HTML string. */
+  _buildHtml() {
+    if (!this._statics) return this._dynamics ? this._dynamics[0] || "" : "";
+    let html = "";
+    for (let i = 0; i < this._statics.length; i++) {
+      html += this._statics[i];
+      if (i < this._dynamics.length) html += this._dynamics[i] || "";
     }
+    return html;
+  }
+
+  _applyRendered(rendered) {
+    // New wire format: {"s": [...statics...], "0": val, "1": val, …}
+    // Legacy format:  {"0": html_string}  (no "s" key)
+    if (rendered.s) {
+      this._statics  = rendered.s;
+      this._dynamics = [];
+      let i = 0;
+      while (rendered[String(i)] !== undefined) {
+        this._dynamics[i] = rendered[String(i)];
+        i++;
+      }
+    } else if (rendered["0"] !== undefined) {
+      // Legacy: single-slot full HTML
+      this._statics  = null;
+      this._dynamics = [rendered["0"]];
+    }
+
+    _destroyHooks(this.root);
+    this.root.innerHTML = this._buildHtml();
+    this._bindEvents();
+    _mountHooks(this.root, this);
     if (rendered["e"]) this._applyEvents(rendered["e"]);
   }
 
   _applyDiff(diff) {
-    if (diff["0"] !== undefined) {
+    // Update individual dynamic slots from numeric string keys
+    let changed = false;
+    if (this._dynamics) {
+      let i = 0;
+      while (diff[String(i)] !== undefined) {
+        this._dynamics[i] = diff[String(i)];
+        changed = true;
+        i++;
+      }
+    }
+
+    if (changed) {
       _destroyHooks(this.root);
-      this.root.innerHTML = diff["0"];
+      this.root.innerHTML = this._buildHtml();
       this._bindEvents();
       _mountHooks(this.root, this);
       _updateHooks(this.root);
     }
-    if (diff.streams) {
-      this._applyStreams(diff.streams);
-    }
-    if (diff["e"]) this._applyEvents(diff["e"]);
+
+    if (diff.streams) this._applyStreams(diff.streams);
+    if (diff["e"])    this._applyEvents(diff["e"]);
   }
 
   // ── Server-pushed events ───────────────────────────────────────────────────
