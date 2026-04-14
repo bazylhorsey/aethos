@@ -13,6 +13,7 @@ members = [
     "crates/aethos_example",
     "crates/aethos_orm",
     "crates/aethos_orm_macros",
+    "crates/aethos_auth",
     "crates/aethos_wiki",
 ]
 resolver = "2"
@@ -65,3 +66,4 @@ aethos_presence = { path = "crates/aethos_presence" }
 aethos_live     = { path = "crates/aethos_live" }
 aethos_macros   = { path = "crates/aethos_macros" }
 aethos          = { path = "crates/aethos" }
+aethos_auth     = { path = "crates/aethos_auth" }

@@ -1,6 +1,9 @@
 use std::path::Path;
 use std::process;
 
+mod gen_auth;
+mod docker;
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -15,14 +18,18 @@ fn main() {
     match args {
         ["new", name] => cmd_new(name),
         ["gen", "controller", name] => cmd_gen_controller(name),
-        ["gen", "live", name] => cmd_gen_live(name),
-        ["gen", "channel", name] => cmd_gen_channel(name),
-        ["gen", "migration", name] => cmd_gen_migration(name),
-        ["db.migrate"] => cmd_db_migrate("."),
+        ["gen", "live", name]       => cmd_gen_live(name),
+        ["gen", "channel", name]    => cmd_gen_channel(name),
+        ["gen", "migration", name]  => cmd_gen_migration(name),
+        ["gen", "auth"]             => gen_auth::cmd_gen_auth(".", "argon2"),
+        ["gen", "auth", "--hasher", h] => gen_auth::cmd_gen_auth(".", h),
+        ["db.migrate"]  => cmd_db_migrate("."),
         ["db.rollback"] => cmd_db_rollback("."),
-        ["db.reset"] => cmd_db_reset("."),
-        ["db.status"] => cmd_db_status("."),
-        ["routes"] => cmd_routes("."),
+        ["db.reset"]    => cmd_db_reset("."),
+        ["db.status"]   => cmd_db_status("."),
+        ["routes"]      => cmd_routes("."),
+        ["docker.gen"]  => docker::cmd_docker_gen("."),
+        ["watch"]       => cmd_watch("."),
         _ => {
             eprintln!("{}", HELP);
             process::exit(1);
@@ -39,6 +46,8 @@ USAGE:
     cargo aethos gen live <Name>             Generate a LiveView
     cargo aethos gen channel <Name>          Generate a Channel
     cargo aethos gen migration <name>        Generate a timestamped migration file
+    cargo aethos gen auth                    Generate authentication scaffold
+    cargo aethos gen auth --hasher bcrypt    Generate auth scaffold with bcrypt
 
     cargo aethos db.migrate                  Run pending migrations
     cargo aethos db.rollback                 Roll back the last migration
@@ -46,6 +55,8 @@ USAGE:
     cargo aethos db.status                   Show applied migrations
 
     cargo aethos routes                      Print all routes defined in src/
+    cargo aethos docker.gen                  Generate Dockerfile + docker-compose.yml
+    cargo aethos watch                       Hot-reload dev server (requires cargo-watch)
 "#;
 
 fn cmd_new(name: &str) {
@@ -459,6 +470,40 @@ fn cmd_db_status(project_root: &str) {
             Err(e) => { eprintln!("db.status failed: {e}"); process::exit(1); }
         }
     });
+}
+
+fn cmd_watch(root: &str) {
+    // Check if cargo-watch is available
+    let check = std::process::Command::new("cargo")
+        .args(["watch", "--version"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    if check.map(|s| s.success()).unwrap_or(false) {
+        // Detect binary name from Cargo.toml
+        let cargo_toml = std::fs::read_to_string(
+            std::path::Path::new(root).join("Cargo.toml")
+        ).unwrap_or_default();
+        let bin_name = cargo_toml.lines()
+            .find_map(|l| {
+                let l = l.trim();
+                l.strip_prefix("name").and_then(|r| r.split('"').nth(1))
+            })
+            .unwrap_or("app")
+            .to_owned();
+
+        println!("→ cargo watch -w src -x 'run -p {bin_name}'");
+        let status = std::process::Command::new("cargo")
+            .args(["watch", "-w", "src", "-x", &format!("run -p {bin_name}")])
+            .status()
+            .expect("failed to run cargo watch");
+        process::exit(status.code().unwrap_or(0));
+    } else {
+        eprintln!("cargo-watch not found. Install it with:");
+        eprintln!("  cargo install cargo-watch");
+        process::exit(1);
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
