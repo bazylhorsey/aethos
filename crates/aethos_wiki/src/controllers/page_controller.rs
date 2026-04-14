@@ -1,4 +1,6 @@
-use aethos::Conn;
+use aethos::{Conn, path, url_encode};
+use aethos::http::StatusCode;
+use aethos::orm::Changeset;
 use pulldown_cmark::{Parser, Options, html as cmark_html};
 
 use crate::models::Entry;
@@ -7,170 +9,145 @@ use crate::templates::{layout, pages};
 
 pub struct PageController;
 
-fn get_state(conn: &Conn) -> AppState {
-    conn.request
-        .extensions()
-        .get::<AppState>()
+fn state(conn: &Conn) -> AppState {
+    conn.get_assign::<AppState>()
         .cloned()
-        .expect("AppState not found in request extensions")
+        .expect("AppState not in assigns — is FetchState plug installed?")
 }
 
 fn markdown_to_html(md: &str) -> String {
     let parser = Parser::new_ext(md, Options::all());
-    let mut html_out = String::new();
-    cmark_html::push_html(&mut html_out, parser);
-    html_out
+    let mut out = String::new();
+    cmark_html::push_html(&mut out, parser);
+    out
 }
 
 impl PageController {
-    /// GET / — list all entries
+    /// GET /
     pub async fn index(conn: Conn) -> Conn {
-        let state = get_state(&conn);
-        let entries = Entry::all(&state.repo).await;
-        let content = pages::index_page(&entries);
-        conn.html(layout::render_page("Home", &content))
+        let entries = Entry::all(&state(&conn).content_dir).await;
+        conn.html(layout::render_page("Home", &pages::index_page(&entries)))
     }
 
-    /// GET /wiki/:title — show entry
+    /// GET /wiki/:title
     pub async fn show(conn: Conn) -> Conn {
-        let state = get_state(&conn);
         let title = conn.params.get("title").unwrap_or("").to_owned();
-        match Entry::find_by_title(&state.repo, &title).await {
+        let dir = state(&conn).content_dir;
+        match Entry::find_by_title(&dir, &title).await {
             Some(entry) => {
-                let html_content = markdown_to_html(&entry.content);
-                let content = pages::show_page(&entry, &html_content);
-                conn.html(layout::render_page(&title, &content))
+                let body = pages::show_page(&entry, &markdown_to_html(&entry.content));
+                conn.html(layout::render_page(&title, &body))
             }
-            None => {
-                let content = pages::not_found_page(&title);
-                conn.put_status(aethos::http::StatusCode::NOT_FOUND)
-                    .html(layout::render_page("Not Found", &content))
-            }
+            None => conn.put_status(StatusCode::NOT_FOUND)
+                .html(layout::render_page("Not Found", &pages::not_found_page(&title))),
         }
     }
 
-    /// GET /wiki/new — new entry form
+    /// GET /wiki/new
     pub async fn new_form(conn: Conn) -> Conn {
-        let prefill_title = conn.params.get("title").unwrap_or("").to_owned();
-        let content = pages::new_form(None, &prefill_title, "");
-        conn.html(layout::render_page("New Page", &content))
+        conn.html(layout::render_page("New Page", &pages::new_form(None)))
     }
 
-    /// POST /wiki/new — create entry
+    /// POST /wiki/new
     pub async fn create(conn: Conn) -> Conn {
-        let state = get_state(&conn);
-        let title = conn.params.get("title").unwrap_or("").trim().to_owned();
-        let body = conn.params.get("content").unwrap_or("").to_owned();
+        let dir = state(&conn).content_dir;
+        let cs  = Entry::changeset(conn.params.get("title"), conn.params.get("content"));
 
-        if title.is_empty() {
-            let content = pages::new_form(Some("Title cannot be empty."), &title, &body);
-            return conn
-                .put_status(aethos::http::StatusCode::UNPROCESSABLE_ENTITY)
-                .html(layout::render_page("New Page", &content));
+        if !cs.is_valid() {
+            return conn.put_status(StatusCode::UNPROCESSABLE_ENTITY)
+                .html(layout::render_page("New Page", &pages::new_form(Some(&cs))));
         }
 
-        if Entry::find_by_title(&state.repo, &title).await.is_some() {
-            let msg = format!("An entry titled \"{}\" already exists.", title);
-            let content = pages::new_form(Some(&msg), &title, &body);
-            return conn
-                .put_status(aethos::http::StatusCode::UNPROCESSABLE_ENTITY)
-                .html(layout::render_page("New Page", &content));
-        }
+        let data  = cs.apply().unwrap();
+        let title = data["title"].clone();
+        let body  = data["content"].clone();
 
-        match Entry::create(&state.repo, &title, &body).await {
-            Ok(()) => {
-                let redirect_url = format!("/wiki/{}", layout::url_encode(&title));
-                conn.redirect(redirect_url)
+        match Entry::create(&dir, &title, &body).await {
+            Ok(()) => conn.redirect(path!("/wiki/:title", title = url_encode(&title))),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let dup_cs = Changeset::new()
+                    .cast_str("title", Some(title.as_str()))
+                    .cast_str("content", Some(body.as_str()))
+                    .validate_with("title", |_| {
+                        Some(format!("A page titled \"{}\" already exists.", title))
+                    });
+                conn.put_status(StatusCode::UNPROCESSABLE_ENTITY)
+                    .html(layout::render_page("New Page", &pages::new_form(Some(&dup_cs))))
             }
             Err(e) => {
-                let msg = format!("Failed to create entry: {e}");
-                let content = pages::new_form(Some(&msg), &title, &body);
-                conn.put_status(aethos::http::StatusCode::INTERNAL_SERVER_ERROR)
-                    .html(layout::render_page("New Page", &content))
+                let err_cs = Changeset::new()
+                    .cast_str("title", Some(title.as_str()))
+                    .cast_str("content", Some(body.as_str()))
+                    .validate_with("title", |_| Some(format!("Failed to save: {e}")));
+                conn.put_status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .html(layout::render_page("New Page", &pages::new_form(Some(&err_cs))))
             }
         }
     }
 
-    /// GET /wiki/:title/edit — edit form
+    /// GET /wiki/:title/edit
     pub async fn edit_form(conn: Conn) -> Conn {
-        let state = get_state(&conn);
         let title = conn.params.get("title").unwrap_or("").to_owned();
-        match Entry::find_by_title(&state.repo, &title).await {
-            Some(entry) => {
-                let page_title = format!("Edit: {}", title);
-                let content = pages::edit_form(&entry, None);
-                conn.html(layout::render_page(&page_title, &content))
-            }
-            None => {
-                let content = pages::not_found_page(&title);
-                conn.put_status(aethos::http::StatusCode::NOT_FOUND)
-                    .html(layout::render_page("Not Found", &content))
-            }
+        let dir   = state(&conn).content_dir;
+        match Entry::find_by_title(&dir, &title).await {
+            Some(entry) => conn.html(layout::render_page(
+                &format!("Edit: {title}"),
+                &pages::edit_form(&entry, None),
+            )),
+            None => conn.put_status(StatusCode::NOT_FOUND)
+                .html(layout::render_page("Not Found", &pages::not_found_page(&title))),
         }
     }
 
-    /// POST /wiki/:title/edit — update entry
+    /// POST /wiki/:title/edit
     pub async fn update(conn: Conn) -> Conn {
-        let state = get_state(&conn);
         let title = conn.params.get("title").unwrap_or("").to_owned();
-        let body = conn.params.get("content").unwrap_or("").to_owned();
+        let dir   = state(&conn).content_dir;
+        let cs    = Entry::changeset(Some(&title), conn.params.get("content"));
 
-        match Entry::find_by_title(&state.repo, &title).await {
-            Some(entry) => match Entry::update(&state.repo, &title, &body).await {
-                Ok(()) => {
-                    let redirect_url = format!("/wiki/{}", layout::url_encode(&title));
-                    conn.redirect(redirect_url)
+        match Entry::find_by_title(&dir, &title).await {
+            None => conn.put_status(StatusCode::NOT_FOUND)
+                .html(layout::render_page("Not Found", &pages::not_found_page(&title))),
+            Some(entry) => {
+                if !cs.is_valid() {
+                    return conn.put_status(StatusCode::UNPROCESSABLE_ENTITY)
+                        .html(layout::render_page(&format!("Edit: {title}"), &pages::edit_form(&entry, Some(&cs))));
                 }
-                Err(e) => {
-                    let msg = format!("Failed to save: {e}");
-                    let page_title = format!("Edit: {}", title);
-                    let content = pages::edit_form(&entry, Some(&msg));
-                    conn.put_status(aethos::http::StatusCode::INTERNAL_SERVER_ERROR)
-                        .html(layout::render_page(&page_title, &content))
+                let data = cs.apply().unwrap();
+                match Entry::update(&dir, &title, &data["content"]).await {
+                    Ok(()) => conn.redirect(path!("/wiki/:title", title = url_encode(&title))),
+                    Err(e) => {
+                        let err_cs = Changeset::new()
+                            .cast_str("title", Some(title.as_str()))
+                            .cast_str("content", Some(data["content"].as_str()))
+                            .validate_with("content", |_| Some(format!("Failed to save: {e}")));
+                        conn.put_status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .html(layout::render_page(&format!("Edit: {title}"), &pages::edit_form(&entry, Some(&err_cs))))
+                    }
                 }
-            },
-            None => {
-                let content = pages::not_found_page(&title);
-                conn.put_status(aethos::http::StatusCode::NOT_FOUND)
-                    .html(layout::render_page("Not Found", &content))
             }
         }
     }
 
-    /// GET /search?q=... — search entries
+    /// GET /search?q=...
     pub async fn search(conn: Conn) -> Conn {
-        let state = get_state(&conn);
         let query = conn.params.get("q").unwrap_or("").trim().to_owned();
+        if query.is_empty() { return conn.redirect("/"); }
 
-        if query.is_empty() {
-            return conn.redirect("/");
+        let dir     = state(&conn).content_dir;
+        let results = Entry::search(&dir, &query).await;
+        if let Some(exact) = results.iter().find(|e| e.title.eq_ignore_ascii_case(&query)) {
+            return conn.redirect(path!("/wiki/:title", title = url_encode(&exact.title)));
         }
-
-        let results = Entry::search(&state.repo, &query).await;
-
-        // Exact case-insensitive match → redirect directly
-        let exact = results
-            .iter()
-            .find(|e| e.title.to_lowercase() == query.to_lowercase());
-
-        if let Some(entry) = exact {
-            let redirect_url = format!("/wiki/{}", layout::url_encode(&entry.title));
-            return conn.redirect(redirect_url);
-        }
-
-        let content = pages::search_results_page(&query, &results);
-        conn.html(layout::render_page("Search Results", &content))
+        conn.html(layout::render_page("Search Results", &pages::search_results_page(&query, &results)))
     }
 
-    /// GET /random — redirect to a random entry
+    /// GET /random
     pub async fn random(conn: Conn) -> Conn {
-        let state = get_state(&conn);
-        let entries = Entry::all(&state.repo).await;
-        if entries.is_empty() {
-            return conn.redirect("/");
-        }
+        let entries = Entry::all(&state(&conn).content_dir).await;
+        if entries.is_empty() { return conn.redirect("/"); }
         let idx = (rand::random::<u64>() as usize) % entries.len();
-        let redirect_url = format!("/wiki/{}", layout::url_encode(&entries[idx].title));
-        conn.redirect(redirect_url)
+        conn.redirect(path!("/wiki/:title", title = url_encode(&entries[idx].title)))
     }
 }
+

@@ -185,6 +185,38 @@ impl Repo<sqlx::Sqlite> {
             .ok_or(OrmError::NotFound)
     }
 
+    /// Typed update using the [`Schema`] trait — updates all non-PK columns by primary key.
+    ///
+    /// Requires `T::primary_key_value()` to return a non-Null value.
+    pub async fn update<T>(&self, record: &T) -> Result<(), OrmError>
+    where
+        T: Schema,
+    {
+        let cols = T::columns();
+        let set_clause: String = cols.iter().enumerate()
+            .map(|(i, col)| {
+                let mut s = format!("{col} = ?");
+                let mut buf = itoa::Buffer::new();
+                s.push_str(buf.format(i + 1));
+                s
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut pk_idx_buf = itoa::Buffer::new();
+        let pk_idx = pk_idx_buf.format(cols.len() + 1);
+        let sql = format!(
+            "UPDATE {} SET {} WHERE {} = ?{}",
+            T::table_name(), set_clause, T::primary_key(), pk_idx
+        );
+        let mut q = sqlx::query(&sql);
+        for val in record.to_row_values() {
+            q = val.bind_sqlite(q);
+        }
+        q = record.primary_key_value().bind_sqlite(q);
+        q.execute(self.pool()).await?;
+        Ok(())
+    }
+
     pub async fn delete(&self, table: &str, id: i64) -> Result<(), OrmError> {
         sqlx::query(&format!("DELETE FROM {table} WHERE id = ?1"))
             .bind(id).execute(self.pool()).await?;

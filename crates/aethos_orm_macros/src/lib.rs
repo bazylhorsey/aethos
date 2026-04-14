@@ -61,6 +61,7 @@ fn expand_schema(input: DeriveInput) -> syn::Result<TokenStream2> {
     };
 
     let mut primary_key = "id".to_string();
+    let mut pk_ident: Option<proc_macro2::Ident> = None;
     let mut insert_cols: Vec<String>  = Vec::new();
     let mut value_exprs: Vec<TokenStream2> = Vec::new();
 
@@ -75,6 +76,7 @@ fn expand_schema(input: DeriveInput) -> syn::Result<TokenStream2> {
 
         if is_pk {
             primary_key = col;
+            pk_ident = Some(ident.clone());
             continue;
         }
 
@@ -86,6 +88,16 @@ fn expand_schema(input: DeriveInput) -> syn::Result<TokenStream2> {
 
     let col_literals: Vec<_> = insert_cols.iter().map(|c| quote!(#c)).collect();
 
+    let pk_value_impl = if let Some(pk) = pk_ident {
+        quote! {
+            fn primary_key_value(&self) -> ::aethos_orm::SqlValue {
+                ::aethos_orm::SqlValue::from(::std::clone::Clone::clone(&self.#pk))
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     Ok(quote! {
         impl ::aethos_orm::Schema for #name {
             fn table_name() -> &'static str { #table_name }
@@ -96,6 +108,7 @@ fn expand_schema(input: DeriveInput) -> syn::Result<TokenStream2> {
             fn to_row_values(&self) -> ::std::vec::Vec<::aethos_orm::SqlValue> {
                 vec![#(#value_exprs),*]
             }
+            #pk_value_impl
         }
     })
 }

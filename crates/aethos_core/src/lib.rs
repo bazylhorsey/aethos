@@ -10,6 +10,7 @@ pub mod session;
 pub mod telemetry;
 pub mod crypto;
 pub mod supervisor;
+pub mod util;
 
 pub use conn::Conn;
 pub use plug::{Plug, Next, BoxPlug};
@@ -20,6 +21,7 @@ pub use error::AethosError;
 pub use type_map::TypeMap;
 pub use session::{Session, set_session_secret};
 pub use telemetry::Telemetry;
+pub use util::url_encode;
 pub use supervisor::{Supervisor, SupervisorStrategy, SupervisorHandle, ChildSpec, RestartConfig, RestartPolicy, DynamicSupervisor};
 
 pub use async_trait::async_trait;

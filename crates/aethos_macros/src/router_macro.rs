@@ -539,6 +539,21 @@ fn concat_path(prefix: &LitStr, path: &LitStr) -> LitStr {
     } else {
         format!("{}/{}", p, r)
     };
-    // Axum uses `:param` style which matches Phoenix's `:param`
+    // Convert Phoenix-style `:param` to axum v0.8 `{param}` syntax.
+    let full = convert_path_params(&full);
     LitStr::new(&full, prefix.span())
+}
+
+/// Converts `:name` path segments to `{name}` for axum v0.8+.
+fn convert_path_params(path: &str) -> String {
+    path.split('/')
+        .map(|seg| {
+            if seg.starts_with(':') {
+                format!("{{{}}}", &seg[1..])
+            } else {
+                seg.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }

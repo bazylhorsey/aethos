@@ -1,7 +1,7 @@
-use std::sync::Arc;
-use aethos_orm::Repo;
+use std::path::PathBuf;
 
+/// Application state — path to the markdown content directory.
 #[derive(Clone)]
 pub struct AppState {
-    pub repo: Arc<Repo<sqlx::Sqlite>>,
+    pub content_dir: PathBuf,
 }

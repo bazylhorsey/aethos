@@ -4,7 +4,7 @@
 pub use aethos_core::{
     Conn, Plug, Next, BoxPlug, Params, FlashMap, ResponseBody, AethosError, TypeMap,
     async_trait, axum, bytes, http, serde, serde_json, tower, tracing,
-    Telemetry,
+    Telemetry, url_encode,
     Supervisor, SupervisorStrategy, SupervisorHandle, ChildSpec, RestartConfig, RestartPolicy, DynamicSupervisor,
 };
 
@@ -41,7 +41,33 @@ pub use aethos_html::assigns;
 
 /// Database access — schema, repo, changeset, query DSL, migrations.
 pub mod orm {
-    pub use aethos_orm::{Repo, PoolConfig, Schema, Changeset, ChangesetError, Query, MigrationRunner, OrmError, sqlx, chrono, uuid};
+    pub use aethos_orm::{Repo, PoolConfig, Schema, Changeset, ChangesetError, Query, MigrationRunner, OrmError, SqlValue, sqlx, chrono, uuid};
+}
+
+/// Renders per-field validation errors as an HTML `<span>` element, analogous to
+/// Phoenix's `error_tag/2`. Returns an empty string when there are no errors.
+///
+/// # Example
+/// ```rust,ignore
+/// h! {
+///     <div class="form-group">
+///         <input type="text" name="title" value={cs.get("title").unwrap_or("")} />
+///         {raw(field_errors(&cs, "title"))}
+///     </div>
+/// }
+/// ```
+pub fn field_errors(cs: &aethos_orm::Changeset, field: &str) -> String {
+    let errors = cs.errors_for(field);
+    if errors.is_empty() {
+        return String::new();
+    }
+    let mut html = String::from(r#"<span class="field-error">"#);
+    let msgs: Vec<String> = errors.iter()
+        .map(|e| aethos_html::html_escape(&e.message))
+        .collect();
+    html.push_str(&msgs.join("; "));
+    html.push_str("</span>");
+    html
 }
 
 /// Telemetry event types and helpers.
