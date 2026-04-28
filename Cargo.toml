@@ -14,7 +14,7 @@ members = [
     "crates/aethos_orm",
     "crates/aethos_orm_macros",
     "crates/aethos_auth",
-    "crates/aethos_wiki",
+    "examples/wiki",
 ]
 resolver = "2"
 
